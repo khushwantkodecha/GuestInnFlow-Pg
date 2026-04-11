@@ -1,0 +1,162 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+@layer base {
+  body {
+    background-color: #f8fafc;
+    @apply text-slate-700;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  button, a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Custom scrollbar for light theme */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+}
+
+/* ── Reusable component classes ──────────────────────────────────────────────*/
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white
+           active:scale-95 transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed
+           bg-primary-500 hover:bg-primary-600 shadow-sm hover:shadow;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-700
+           active:scale-95 transition-all duration-200
+           bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 shadow-sm;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-semibold text-white
+           hover:bg-red-600 active:scale-95
+           transition-all duration-200 shadow-sm hover:shadow;
+  }
+
+  .input {
+    @apply block w-full rounded-xl px-3.5 py-2.5 text-sm placeholder-slate-400
+           transition-all duration-200
+           bg-white border border-slate-200 text-slate-800
+           focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10;
+  }
+
+  .label {
+    @apply block text-sm font-medium mb-1.5 text-slate-500;
+  }
+
+  .card {
+    @apply rounded-2xl transition-all duration-300 bg-white border border-slate-200 shadow-card;
+  }
+  .card:hover {
+    @apply border-slate-300;
+  }
+
+  .card-hover {
+    @apply hover:-translate-y-0.5 transition-all duration-300;
+  }
+  .card-hover:hover {
+    @apply shadow-card-hover border-primary-200;
+  }
+
+  /* Table scroll */
+  .table-scroll {
+    @apply w-full overflow-x-auto -mx-0 rounded-2xl;
+  }
+  .table-scroll table {
+    @apply min-w-full;
+  }
+}
+
+/* ── Keyframe animations ─────────────────────────────────────────────────────*/
+@layer utilities {
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+    to   { opacity: 1; transform: scale(1)    translateY(0);    }
+  }
+
+  @keyframes pageIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; }
+  }
+
+  @keyframes slideInRight {
+    from { opacity: 0; transform: translateX(20px); }
+    to   { opacity: 1; transform: translateX(0);    }
+  }
+
+  @keyframes shimmer {
+    0%   { background-position: -800px 0; }
+    100% { background-position: 800px 0; }
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(96,195,173,0); }
+    50%      { box-shadow: 0 0 12px 2px rgba(96,195,173,.15); }
+  }
+
+  .animate-fadeIn {
+    animation: fadeIn 0.15s ease-out both;
+  }
+
+  .animate-scaleIn {
+    animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-pageIn {
+    animation: pageIn 0.25s ease-out both;
+  }
+
+  .animate-slideInRight {
+    animation: slideInRight 0.2s ease-out both;
+  }
+
+  .animate-shimmer {
+    background: linear-gradient(90deg, #F1F5F9 0%, #E8EDF3 40%, #F1F5F9 60%, #F1F5F9 100%);
+    background-size: 800px 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  /* Card highlight */
+  @keyframes highlightFade {
+    0%   { box-shadow: 0 0 0 3px rgba(96,195,173,.2), 0 0 20px rgba(96,195,173,.1); }
+    60%  { box-shadow: 0 0 0 3px rgba(96,195,173,.1), 0 0 10px rgba(96,195,173,.05); }
+    100% { box-shadow: 0 0 0 0px transparent; }
+  }
+
+  .animate-highlightFade {
+    animation: highlightFade 1.6s ease-out forwards;
+  }
+}
