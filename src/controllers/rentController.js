@@ -1,5 +1,6 @@
 const Property    = require('../models/Property');
 const RentPayment = require('../models/RentPayment');
+const Tenant      = require('../models/Tenant');
 const rentService = require('../services/rentService');
 const asyncHandler = require('../utils/asyncHandler');
 
@@ -106,12 +107,22 @@ const getTenantRentHistory = asyncHandler(async (req, res) => {
 
   await rentService.syncOverdueRents(req.params.propertyId);
 
-  const rents = await RentPayment.find({
-    property: req.params.propertyId,
-    tenant:   req.params.tenantId,
-  }).sort({ year: -1, month: -1 });
+  const [rents, tenant] = await Promise.all([
+    RentPayment.find({
+      property: req.params.propertyId,
+      tenant:   req.params.tenantId,
+    }).sort({ year: -1, month: -1 }),
+    Tenant.findById(req.params.tenantId).select('rentHistory').lean(),
+  ]);
 
-  res.json({ success: true, count: rents.length, data: rents });
+  // Filter to genuine rent changes only:
+  //   - oldRent must exist and be > 0 (excludes initial assignment where oldRent = 0)
+  //   - newRent must differ from oldRent
+  const rentChanges = (tenant?.rentHistory ?? []).filter(
+    (e) => e.oldRent !== undefined && e.oldRent > 0 && e.newRent !== e.oldRent
+  );
+
+  res.json({ success: true, count: rents.length, data: rents, rentChanges });
 });
 
 // ─── Payment (new — replaces per-record markAsPaid for tracked flow) ──────────

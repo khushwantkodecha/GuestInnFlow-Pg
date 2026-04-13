@@ -22,6 +22,7 @@ export const markDepositPaid = (propertyId, id, paid, depositAmount) => {
   }
   return api.put(`/properties/${propertyId}/tenants/${id}`, body)
 }
+// Returns { data: rentRecords[], rentChanges: rentHistoryEntries[] }
 export const getTenantRents = (propertyId, tenantId) =>
   api.get(`/properties/${propertyId}/tenants/${tenantId}/rents`)
 

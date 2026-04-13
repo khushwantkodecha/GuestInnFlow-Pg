@@ -47,7 +47,7 @@ const bedSchema = new mongoose.Schema(
       phone:             { type: String, trim: true, default: null },
       moveInDate:        { type: Date, default: null },
       notes:             { type: String, trim: true, default: null },
-      source:            { type: String, enum: ['lead', 'existing_tenant'], default: 'lead' },
+      source:            { type: String, enum: ['reserved', 'existing_tenant'], default: 'reserved' },
       // ── Advance (token) amount ─────────────────────────────────────────────
       reservationAmount: { type: Number, min: 0, default: 0 },
       reservationMode:   { type: String, enum: ['adjust', 'refund', null], default: null },

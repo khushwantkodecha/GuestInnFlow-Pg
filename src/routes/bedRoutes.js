@@ -2,7 +2,8 @@ const express = require('express');
 const {
   getBeds, getBed, createBed, createExtraBed, updateBed, deleteBed,
   assignBed, vacateCheck, vacateBed, reserveBed, cancelReservation, blockBed, unblockBed,
-  changeBed, getRoomAnalytics, bulkBlockBeds, bulkUnblockBeds, bulkVacateBeds, rentPreview,
+  changeBed, moveReservation, getRoomAnalytics, bulkBlockBeds, bulkUnblockBeds, bulkVacateBeds, rentPreview,
+  midStayDepositAdjust,
 } = require('../controllers/bedController');
 const { protect } = require('../middleware/auth');
 const validate = require('../middleware/validate');
@@ -23,14 +24,16 @@ router.route('/').get(getBeds).post(createBed);
 router.route('/:id').get(getBed).put(updateBed).delete(deleteBed);
 
 router.patch('/:id/assign',      validate(assignBedSchema),  assignBed);
-router.patch('/:id/change-room', changeBed);
+router.patch('/:id/change-room',       changeBed);
+router.patch('/:id/move-reservation',  moveReservation);
 router.get(  '/:id/vacate-check', vacateCheck);
 router.get(  '/:id/rent-preview', rentPreview);
 router.patch('/:id/vacate',    vacateBed);
 router.patch('/:id/checkout',  vacateBed);           // backward compat
 router.patch('/:id/reserve',   validate(reserveBedSchema), reserveBed);
 router.patch('/:id/unreserve', cancelReservation);
-router.patch('/:id/block',     blockBed);
-router.patch('/:id/unblock',   unblockBed);
+router.patch('/:id/block',          blockBed);
+router.patch('/:id/unblock',        unblockBed);
+router.patch('/:id/deposit-adjust', midStayDepositAdjust);
 
 module.exports = router;

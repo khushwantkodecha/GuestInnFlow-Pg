@@ -21,8 +21,8 @@ export const vacateBed = (propertyId, roomId, bedId, data) =>
   api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/vacate`, data ?? {})
 export const reserveBed = (propertyId, roomId, bedId, data) =>
   api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/reserve`, data)
-export const cancelReservation = (propertyId, roomId, bedId) =>
-  api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/unreserve`)
+export const cancelReservation = (propertyId, roomId, bedId, data = {}) =>
+  api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/unreserve`, data)
 export const blockBed = (propertyId, roomId, bedId, data = {}) =>
   api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/block`, data)
 export const unblockBed = (propertyId, roomId, bedId) =>
@@ -45,6 +45,13 @@ export const getRoomActivity = (propertyId, roomId) =>
 
 export const changeBed = (propertyId, roomId, bedId, data) =>
   api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/change-room`, data)
+
+// Move a reservation from a reserved bed to a different vacant bed (reserved tenant, pre-assignment)
+export const moveReservation = (propertyId, roomId, bedId, targetBedId) =>
+  api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/move-reservation`, { targetBedId })
+
+export const midStayDepositAdjust = (propertyId, roomId, bedId, data) =>
+  api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/deposit-adjust`, data)
 
 // Bulk operations
 export const bulkBlockBeds = (propertyId, roomId, bedIds) =>

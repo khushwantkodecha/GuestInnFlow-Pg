@@ -19,6 +19,7 @@ import {
   BookOpen,
   FileText,
   Bell,
+  Wallet,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useProperty } from '../../context/PropertyContext'
@@ -38,6 +39,7 @@ const NAV_SECTIONS = [
       { to: '/rooms',      label: 'Rooms & Beds', icon: BedDouble  },
       { to: '/tenants',    label: 'Tenants',       icon: Users      },
       { to: '/rent',       label: 'Rent Payments', icon: CreditCard },
+      { to: '/billing',    label: 'Billing',        icon: Wallet     },
       { to: '/invoices',   label: 'Invoices',      icon: FileText   },
       { to: '/reminders',  label: 'Reminders',     icon: Bell       },
       { to: '/expenses',   label: 'Expenses',      icon: Receipt    },

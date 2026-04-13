@@ -16,9 +16,10 @@ const searchRoutes      = require('./routes/searchRoutes');
 const accountingRoutes  = require('./routes/accountingRoutes');
 const invoiceRoutes     = require('./routes/invoiceRoutes');
 const reminderRoutes    = require('./routes/reminderRoutes');
-const { startReservationCron }      = require('./services/reservationCron');
-const { startRecurringExpenseCron } = require('./services/recurringExpenseCron');
-const { startReminderScheduler }    = require('./services/reminderScheduler');
+const { startReservationCron }        = require('./services/reservationCron');
+const { startRecurringExpenseCron }   = require('./services/recurringExpenseCron');
+const { startReminderScheduler }      = require('./services/reminderScheduler');
+const { startBillingCycleScheduler }  = require('./services/billingCycleScheduler');
 
 connectDB();
 
@@ -26,6 +27,7 @@ connectDB();
 startReservationCron();
 startRecurringExpenseCron();
 startReminderScheduler();
+startBillingCycleScheduler();
 
 const rateLimit = require('express-rate-limit');
 

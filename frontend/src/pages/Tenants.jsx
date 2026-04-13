@@ -43,16 +43,14 @@ const initials     = (name = '') => name.split(' ').map((n) => n[0]).join('').to
 const waLink = (phone = '') => `https://wa.me/${phone.replace(/[^\d]/g, '')}`
 
 // ── Computed field helpers ────────────────────────────────────────────────────
+// Returns a rough rent status from cached ledgerBalance (positive = owes money).
+// Detailed per-cycle status comes from RentPayment records loaded in the profile.
 const computeRentStatus = (tenant) => {
   if (!tenant || tenant.status === 'vacated') return null
-  const today   = new Date()
-  const dueDay  = tenant.dueDate ?? 1
-  const todayDay = today.getDate()
-  const diff    = todayDay - dueDay  // positive = past due, negative = before due
-  if (diff < -3)                  return 'current'
-  if (diff >= -3 && diff < 0)     return 'due_soon'
-  if (diff >= 0  && diff <= 7)    return 'pending'
-  return 'overdue'
+  const lb = tenant.ledgerBalance
+  if (lb == null) return null
+  if (lb <= 0)   return 'current'   // settled or advance credit
+  return 'pending'                   // has outstanding balance (may be overdue)
 }
 
 const computeHealthScore = (tenant) => {
@@ -75,10 +73,49 @@ const computeStayDuration = (checkInDate) => {
   return rem ? `${years}y ${rem}mo` : `${years}y`
 }
 
+// ── Billing cycle helper ──────────────────────────────────────────────────────
+// Returns the billing cycle period that contains today for a given tenant.
+const computeBillingCycle = (tenant) => {
+  const anchor = tenant.billingStartDate || tenant.checkInDate
+  if (!anchor) return null
+  const billingDay = new Date(anchor).getDate()
+  const today = new Date()
+  const todayDay   = today.getDate()
+  const todayMonth = today.getMonth()   // 0-based
+  const todayYear  = today.getFullYear()
+
+  const daysThisMonth = new Date(todayYear, todayMonth + 1, 0).getDate()
+  const effectiveThis = Math.min(billingDay, daysThisMonth)
+
+  let cycleStart, cycleEnd
+  if (todayDay >= effectiveThis) {
+    // Cycle started this month
+    cycleStart = new Date(todayYear, todayMonth, effectiveThis)
+    const nextMonth = todayMonth === 11 ? 0  : todayMonth + 1
+    const nextYear  = todayMonth === 11 ? todayYear + 1 : todayYear
+    const daysNext  = new Date(nextYear, nextMonth + 1, 0).getDate()
+    const effectiveNext = Math.min(billingDay, daysNext)
+    cycleEnd = new Date(nextYear, nextMonth, effectiveNext)
+    cycleEnd.setDate(cycleEnd.getDate() - 1)
+  } else {
+    // Still in last month's cycle
+    const prevMonth = todayMonth === 0 ? 11 : todayMonth - 1
+    const prevYear  = todayMonth === 0 ? todayYear - 1 : todayYear
+    const daysPrev  = new Date(prevYear, prevMonth + 1, 0).getDate()
+    const effectivePrev = Math.min(billingDay, daysPrev)
+    cycleStart = new Date(prevYear, prevMonth, effectivePrev)
+    cycleEnd   = new Date(todayYear, todayMonth, effectiveThis)
+    cycleEnd.setDate(cycleEnd.getDate() - 1)
+  }
+
+  return { cycleStart, cycleEnd }
+}
+const fmtCycleDate = (d) =>
+  d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''
+
 // ── Rent status badge ─────────────────────────────────────────────────────────
 const RENT_STATUS_CFG = {
-  current:  { label: 'Current',  cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  due_soon: { label: 'Due Soon', cls: 'text-amber-700 bg-amber-50 border-amber-200' },
+  current:  { label: 'Settled',  cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
   pending:  { label: 'Pending',  cls: 'text-orange-700 bg-orange-50 border-orange-200' },
   overdue:  { label: 'Overdue',  cls: 'text-red-700 bg-red-50 border-red-200' },
 }
@@ -235,7 +272,7 @@ const BulkBar = ({ count, onReminder, onVacate, onExport, onClear }) => (
 // ── Add Tenant Form ───────────────────────────────────────────────────────────
 const EMPTY_FORM = {
   name: '', email: '', phone: '', aadharNumber: '',
-  checkInDate: '', rentAmount: '', depositAmount: '', dueDate: 1,
+  checkInDate: '', rentAmount: '', depositAmount: '', dueDate: 5,
   selectedRoomId: '', bedId: '',
 }
 
@@ -274,7 +311,7 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
     phoneDebounceRef.current = setTimeout(() => {
       searchTenantsApi(propertyId, { phone: val.trim() })
         .then(r => {
-          const active = (r.data?.data ?? []).find(t => t.status === 'active' || t.status === 'notice' || t.status === 'lead')
+          const active = (r.data?.data ?? []).find(t => t.status === 'active' || t.status === 'notice' || t.status === 'reserved')
           setPhoneConflict(active ?? null)
         })
         .catch(() => {})
@@ -364,8 +401,8 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
               onChange={(e) => set('depositAmount', e.target.value)} />
           </div>
           <div>
-            <label className="label">Due Day (1–28)</label>
-            <input type="number" min="1" max="28" className="input" value={form.dueDate}
+            <label className="label">Grace Days (0–28)</label>
+            <input type="number" min="0" max="28" className="input" value={form.dueDate}
               onChange={(e) => set('dueDate', e.target.value)} />
           </div>
         </div>
@@ -664,6 +701,11 @@ const RentHistoryItem = ({ rent }) => {
     <div className="flex items-center justify-between py-3 border-b border-slate-100 last:border-0">
       <div>
         <p className="text-sm font-medium text-slate-700">{months[rent.month - 1]} {rent.year}</p>
+        {rent.periodStart && rent.periodEnd && (
+          <p className="text-[10px] text-primary-500 font-medium">
+            {fdate(rent.periodStart)} – {fdate(rent.periodEnd)}
+          </p>
+        )}
         {rent.paymentDate && (
           <p className="text-xs text-slate-400">Paid {fdate(rent.paymentDate)}</p>
         )}
@@ -880,7 +922,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
     checkOutDate:     t.checkOutDate ? new Date(t.checkOutDate).toISOString().split('T')[0] : '',
     rentAmount:       t.rentAmount ?? 0,
     depositAmount:    t.depositAmount ?? 0,
-    dueDate:          t.dueDate ?? 1,
+    dueDate:          t.dueDate ?? 5,
     notes:            t.notes ?? '',
     // Documents
     idProofUrl:       t.documents?.idProofUrl ?? '',
@@ -1024,6 +1066,15 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
               <p className="text-xs text-slate-400 mt-1.5">
                 <Calendar size={10} className="inline mr-1" />
                 Check-in: {fdate(t.checkInDate)}
+                {(() => {
+                  const cycle = computeBillingCycle(t)
+                  if (!cycle) return null
+                  return (
+                    <span className="ml-2 text-primary-500 font-medium">
+                      · Cycle: {fmtCycleDate(cycle.cycleStart)} – {fmtCycleDate(cycle.cycleEnd)}
+                    </span>
+                  )
+                })()}
               </p>
             )}
           </div>
@@ -1420,8 +1471,8 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                 <input type="number" className="input text-sm" value={form.depositAmount} onChange={e => set('depositAmount', e.target.value)} />
               </div>
               <div>
-                <label className="label text-xs">Due Day (1-28)</label>
-                <input type="number" min="1" max="28" className="input text-sm" value={form.dueDate} onChange={e => set('dueDate', e.target.value)} />
+                <label className="label text-xs">Grace Days (0–28)</label>
+                <input type="number" min="0" max="28" className="input text-sm" value={form.dueDate} onChange={e => set('dueDate', e.target.value)} />
               </div>
               <div className="col-span-2">
                 <label className="label text-xs">Agreement File URL <span className="text-slate-400 font-normal">(optional)</span></label>
@@ -1437,11 +1488,29 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
               {t.agreementType && (
                 <Field label="Type" value={t.agreementType === 'monthly' ? 'Monthly (rolling)' : 'Fixed Term'} />
               )}
-              <Field label="Start Date"   value={fdate(t.checkInDate)} />
-              <Field label="End Date"     value={fdate(t.checkOutDate)} />
-              <Field label="Monthly Rent" value={fmt(t.rentAmount)} />
-              <Field label="Deposit"      value={fmt(t.depositAmount)} />
-              <Field label="Due Date"     value={t.dueDate ? `${t.dueDate}th of every month` : null} />
+              <Field label="Start Date"    value={fdate(t.checkInDate)} />
+              <Field label="End Date"      value={fdate(t.checkOutDate)} />
+              <Field label="Monthly Rent"  value={fmt(t.rentAmount)} />
+              <Field label="Deposit"       value={fmt(t.depositAmount)} />
+              {(() => {
+                const cycle = computeBillingCycle(t)
+                if (!cycle) return <Field label="Billing Cycle" value={null} />
+                const graceDays = t.dueDate ?? 5
+                const dueDate = new Date(cycle.cycleStart)
+                dueDate.setDate(dueDate.getDate() + graceDays)
+                return (
+                  <>
+                    <Field
+                      label="Current Billing Cycle"
+                      value={`${fmtCycleDate(cycle.cycleStart)} → ${fmtCycleDate(cycle.cycleEnd)}`}
+                    />
+                    <Field
+                      label="Grace Days / Due By"
+                      value={`${graceDays} day${graceDays !== 1 ? 's' : ''} → Due ${fmtCycleDate(dueDate)}`}
+                    />
+                  </>
+                )
+              })()}
               {t.agreementFileUrl && (
                 <div className="py-2.5">
                   <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mb-1.5">Agreement File</p>

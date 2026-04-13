@@ -203,11 +203,16 @@ const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onRemind, onLedger, 
         )}
       </td>
 
-      {/* Due Date */}
+      {/* Due Date / Cycle */}
       <td className="px-3 py-3">
         <p className={`text-sm ${isOverdue ? 'text-red-600 font-medium' : 'text-slate-500'}`}>
           {fdate(r.dueDate)}
         </p>
+        {r.periodStart && r.periodEnd && (
+          <p className="text-[10px] text-slate-400 mt-0.5">
+            {fdate(r.periodStart)} – {fdate(r.periodEnd)}
+          </p>
+        )}
         {isOverdue && days > 0 && (
           <p className="text-[10px] font-semibold text-red-500 mt-0.5 flex items-center gap-0.5">
             <AlertTriangle size={9} /> {days}d overdue
@@ -640,7 +645,12 @@ const TenantLedger = ({ tenant, propertyId }) => {
                       </p>
                     )}
                     {r.status !== 'paid' && (
-                      <p className="text-xs text-slate-400 mt-0.5">Due {fdate(r.dueDate)}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Due {fdate(r.dueDate)}
+                        {r.periodStart && r.periodEnd && (
+                          <span className="ml-1">· {fdate(r.periodStart)} – {fdate(r.periodEnd)}</span>
+                        )}
+                      </p>
                     )}
                   </div>
                   <div className="text-right">
@@ -1006,7 +1016,7 @@ const Rent = () => {
                           {!allSelected && someSelected && <span className="h-1.5 w-1.5 rounded-sm bg-primary-400" />}
                         </div>
                       </th>
-                      {['Tenant', 'Room / Bed', 'Amount', 'Due Date', 'Status', 'Paid On', ''].map(h => (
+                      {['Tenant', 'Room / Bed', 'Amount', 'Due / Cycle', 'Status', 'Paid On', ''].map(h => (
                         <th key={h} className="px-3 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">{h}</th>
                       ))}
                     </tr>

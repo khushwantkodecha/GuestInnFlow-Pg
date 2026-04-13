@@ -37,7 +37,7 @@ const verifyRoomOwnership = async (roomId, propertyId, userId) => {
 // Fetch an active bed by id+room, populating tenant with necessary fields
 const fetchBed = (bedId, roomId) =>
   Bed.findOne({ _id: bedId, room: roomId, isActive: true })
-    .populate('tenant', 'name phone status checkInDate rentAmount dueDate depositAmount bed billingSnapshot');
+    .populate('tenant', 'name phone status checkInDate billingStartDate rentAmount dueDate depositAmount bed billingSnapshot');
 
 // GET /api/properties/:propertyId/rooms/:roomId/beds
 const getBeds = asyncHandler(async (req, res) => {
@@ -53,7 +53,26 @@ const getBeds = asyncHandler(async (req, res) => {
   const beds = await Bed.find(filter)
     .collation({ locale: 'en', numericOrdering: true })
     .sort({ isExtra: 1, bedNumber: 1 })
-    .populate('tenant', 'name phone status checkInDate rentAmount depositAmount depositPaid depositReturned billingSnapshot profileStatus aadharNumber address emergencyContact ledgerBalance');
+    .populate('tenant', 'name phone status checkInDate billingStartDate rentAmount dueDate depositAmount depositPaid depositReturned billingSnapshot profileStatus aadharNumber address emergencyContact ledgerBalance');
+
+  // ── Freshen ledgerBalance from LedgerEntry (avoids stale-cache mismatch) ─────
+  // The cached tenant.ledgerBalance can lag behind when payments are recorded on
+  // another page. One aggregation fetch per room-load keeps the tooltip accurate.
+  const tenantsInBeds = beds.filter(b => b.tenant?._id);
+  if (tenantsInBeds.length > 0) {
+    const tenantIds = tenantsInBeds.map(b => b.tenant._id);
+    const latestEntries = await LedgerEntry.aggregate([
+      { $match: { tenant: { $in: tenantIds } } },
+      { $sort:  { createdAt: -1 } },
+      { $group: { _id: '$tenant', balanceAfter: { $first: '$balanceAfter' } } },
+    ]);
+    const balanceMap = new Map(latestEntries.map(e => [e._id.toString(), e.balanceAfter]));
+    for (const bed of tenantsInBeds) {
+      const fresh = balanceMap.get(bed.tenant._id.toString());
+      if (fresh !== undefined) bed.tenant.ledgerBalance = fresh;
+    }
+  }
+
   res.json({ success: true, count: beds.length, data: beds });
 });
 
@@ -274,10 +293,10 @@ const deleteBed = asyncHandler(async (req, res) => {
       bedId: bed._id, roomId: room._id, reservedTill: bed.reservedTill,
     });
     if (bed.tenant) {
-      // Lead tenant linked to an expired hold — clear their bed reference
+      // Reserved tenant linked to an expired hold — clear their bed reference
       await Tenant.findOneAndUpdate(
-        { _id: bed.tenant, status: 'lead' },
-        { $unset: { bed: 1 }, $set: { status: 'vacated' } },
+        { _id: bed.tenant, status: 'reserved' },
+        { $unset: { bed: 1 }, $set: { status: 'vacated', reservationAmount: 0 } },
       );
     }
     bed.tenant       = undefined;
@@ -327,7 +346,9 @@ const assignBed = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
 
-  const { tenantId, rentOverride, deposit, moveInDate } = req.body;
+  const { tenantId, rentOverride, deposit, moveInDate, dueDate, advanceDisposition } = req.body;
+  // advanceDisposition: 'adjust' (default) | 'convert_deposit' | 'keep'
+  // Only relevant when bed is reserved and has a reservation advance > 0.
 
   const bed = await fetchBed(req.params.id, req.params.roomId);
   if (!bed) {
@@ -428,14 +449,15 @@ const assignBed = asyncHandler(async (req, res) => {
   const capturedAdvAmt  = bed.reservation?.reservationAmount ?? 0;
   const capturedAdvMode = bed.reservation?.reservationMode   ?? null;
 
-  // ── Orphan cleanup: if bed was reserved for a DIFFERENT lead, free that lead ─
+  // ── Orphan cleanup: if bed was reserved for a DIFFERENT reserved tenant, free them ─
   if (bed.status === 'reserved' && bed.tenant && String(bed.tenant) !== String(tenantId)) {
-    const orphanedLead = await Tenant.findOne({ _id: bed.tenant, status: 'lead' });
+    const orphanedLead = await Tenant.findOne({ _id: bed.tenant, status: 'reserved' });
     if (orphanedLead) {
-      orphanedLead.status = 'vacated';
-      orphanedLead.bed    = null;
+      orphanedLead.status            = 'vacated';
+      orphanedLead.bed               = null;
+      orphanedLead.reservationAmount = 0;
       await orphanedLead.save();
-      logger.info('bed.assign.orphan_lead_vacated', { bedId: bed._id, orphanedTenantId: orphanedLead._id });
+      logger.info('bed.assign.orphan_reserved_vacated', { bedId: bed._id, orphanedTenantId: orphanedLead._id });
     }
   }
 
@@ -460,7 +482,7 @@ const assignBed = asyncHandler(async (req, res) => {
       bed.status       = 'occupied';
       bed.tenant       = tenant._id;
       bed.reservedTill = null;
-      bed.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null, source: 'lead' };
+      bed.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null, source: 'reserved' };
       await bed.save({ session });
 
       tenant.bed          = bed._id;
@@ -468,8 +490,16 @@ const assignBed = asyncHandler(async (req, res) => {
       tenant.checkOutDate = null;
       // Seed rentAmount with a placeholder; recalculate overwrites it below
       tenant.rentAmount   = 0;
-      if (deposit !== undefined) tenant.depositAmount = Number(deposit);
-      if (moveInDate)            tenant.checkInDate   = new Date(moveInDate);
+      if (deposit !== undefined)  tenant.depositAmount = Number(deposit);
+      if (moveInDate)             tenant.checkInDate   = new Date(moveInDate);
+      if (dueDate !== undefined) {
+        const d = Number(dueDate);
+        if (d >= 0 && d <= 28)   tenant.dueDate = d;  // grace days (0–28)
+      }
+      // Set billingStartDate once at first assignment — immutable anchor for personal cycle
+      if (!tenant.billingStartDate) {
+        tenant.billingStartDate = moveInDate ? new Date(moveInDate) : new Date();
+      }
       // Preserve assignedAt from first assignment if re-assigning
       if (!tenant.billingSnapshot?.assignedAt) {
         tenant.billingSnapshot = { ...(tenant.billingSnapshot ?? {}), assignedAt: new Date() };
@@ -486,28 +516,69 @@ const assignBed = asyncHandler(async (req, res) => {
 
   updatedBed = await fetchBed(req.params.id, req.params.roomId);
 
-  // ── Apply advance credit to tenant ledger (adjust mode only) ─────────────
-  if (capturedAdvAmt > 0 && capturedAdvMode === 'adjust') {
-    const freshTenant = updatedBed?.tenant ?? await Tenant.findById(tenantId);
-    if (freshTenant) {
-      const prevBalance = freshTenant.ledgerBalance ?? 0;
-      const newBalance  = prevBalance - capturedAdvAmt; // credit reduces what tenant owes
+  // ── Handle reservation advance disposition ──────────────────────────────────
+  // The LedgerEntry credit was already written at reservation time.
+  // Disposition choices:
+  //   'adjust' (default) — credit stays; auto-offsets first rent. Mark as converted.
+  //   'convert_deposit'  — reverse the credit (write debit), move amount to depositBalance.
+  //   'keep'             — credit stays as-is; no auto-offset. Mark reservationStatus='held'.
+  if (capturedAdvAmt > 0) {
+    const disposition = advanceDisposition ?? (capturedAdvMode === 'adjust' ? 'adjust' : 'keep');
+
+    if (disposition === 'convert_deposit') {
+      // Reverse the reservation_advance credit → debit so it no longer offsets rent.
+      // Then add the amount into depositBalance as a new deposit.
+      const freshTenant = await Tenant.findById(tenantId).select('ledgerBalance depositBalance depositStatus depositPaid').lean();
+      const currentLedgerBal = freshTenant?.ledgerBalance ?? 0;
+      const newLedgerBal     = currentLedgerBal + capturedAdvAmt; // debit increases balance
+
       await LedgerEntry.create({
-        tenant:        freshTenant._id,
+        tenant:        tenantId,
+        property:      req.params.propertyId,
+        type:          'debit',
+        amount:        capturedAdvAmt,
+        balanceAfter:  newLedgerBal,
+        referenceType: 'reservation_adjusted',
+        referenceId:   bed._id,
+        description:   `Reservation advance ₹${capturedAdvAmt} converted to security deposit at check-in`,
+      });
+
+      // Update tenant: add to depositBalance, reverse ledgerBalance
+      const newDepositBal = (freshTenant?.depositBalance ?? 0) + capturedAdvAmt;
+      await Tenant.updateOne(
+        { _id: tenantId },
+        {
+          $inc: { ledgerBalance: capturedAdvAmt },
+          $set: { depositBalance: newDepositBal, depositStatus: 'held', depositPaid: true, reservationAmount: 0 },
+        }
+      );
+
+      // Audit entry for the deposit portion
+      const afterDeposit = await Tenant.findById(tenantId).select('ledgerBalance').lean();
+      await LedgerEntry.create({
+        tenant:        tenantId,
         property:      req.params.propertyId,
         type:          'credit',
         amount:        capturedAdvAmt,
-        balanceAfter:  newBalance,
-        referenceType: 'reservation_advance',
+        balanceAfter:  afterDeposit?.ledgerBalance ?? 0,
+        referenceType: 'deposit_collected',
         referenceId:   bed._id,
-        description:   `Reservation advance applied to first rent (adjust mode)`,
+        description:   `Security deposit ₹${capturedAdvAmt} sourced from reservation advance at check-in`,
       });
-      await Tenant.updateOne({ _id: freshTenant._id }, { $set: { ledgerBalance: newBalance } });
-      // Mark reservation advance as converted on the bed
+
       await updatedBed.updateOne({ $set: { 'reservation.reservationStatus': 'converted' } });
-      logger.info('bed.assign.advance_applied', {
-        traceId, tenantId: freshTenant._id, amount: capturedAdvAmt, newBalance,
-      });
+      logger.info('bed.assign.advance_converted_to_deposit', { traceId, tenantId, amount: capturedAdvAmt });
+
+    } else if (disposition === 'adjust') {
+      // Default: credit remains in ledger and will offset first rent. Mark as converted.
+      await updatedBed.updateOne({ $set: { 'reservation.reservationStatus': 'converted' } });
+      await Tenant.updateOne({ _id: tenantId }, { $set: { reservationAmount: 0 } });
+      logger.info('bed.assign.advance_marked_converted', { traceId, tenantId, amount: capturedAdvAmt });
+
+    } else {
+      // 'keep': credit remains as general ledger credit. reservationStatus stays 'held'.
+      // reservationAmount stays on tenant until explicitly cleared.
+      logger.info('bed.assign.advance_kept_as_credit', { traceId, tenantId, amount: capturedAdvAmt });
     }
   }
 
@@ -542,6 +613,22 @@ const assignBed = asyncHandler(async (req, res) => {
     finalRent: updatedBed?.tenant?.rentAmount,
     userId:   req.user._id,
   });
+
+  // ── Auto-generate first billing cycle ──────────────────────────────────────
+  // The daily cron handles future cycles, but the first cycle for this tenant
+  // starts today — the cron may have already run, so we generate it immediately.
+  // Non-blocking: any error here doesn't fail the assignment response.
+  try {
+    const now = new Date();
+    await rentService.generateRentForProperty(
+      req.params.propertyId,
+      now.getMonth() + 1,
+      now.getFullYear()
+    );
+    logger.info('bed.assign.first_cycle_generated', { traceId, tenantId: tenant._id });
+  } catch (cycleErr) {
+    logger.warn('bed.assign.first_cycle_failed', { traceId, tenantId: tenant._id, error: cycleErr.message });
+  }
 
   res.json({ success: true, message: 'Tenant assigned to bed', data: updatedBed });
 });
@@ -663,15 +750,18 @@ const vacateBed = asyncHandler(async (req, res) => {
     vacateOption,    // 'collect' | 'proceed'
     paymentAmount,   // used when vacateOption === 'collect'
     paymentMethod,   // used when vacateOption === 'collect'
-    depositAction,   // 'adjust' | 'refund' | null
+    depositAction,   // 'adjust' | 'adjust_and_refund' | 'refund' | 'forfeit' | null
     refundAmount,    // used when depositAction === 'refund'; defaults to depositBalance
     refundMethod,    // payment method used to return deposit (for audit description)
   } = req.body;
   const traceId = crypto.randomUUID();
 
+  // Capture deposit balance BEFORE any modifications (needed for forfeit ledger entry)
+  const preForfeitDepositBalance = tenant.depositBalance ?? tenant.depositAmount ?? 0;
+
   // ── Step 1a: Deposit action ────────────────────────────────────────────────
   let depositAdjustedAmount = 0;
-  if (depositAction === 'adjust') {
+  if (depositAction === 'adjust' || depositAction === 'adjust_and_refund') {
     const depositBal = tenant.depositBalance ?? tenant.depositAmount ?? 0;
     if (depositBal > 0) {
       const openRents = await RentPayment.find({
@@ -733,17 +823,28 @@ const vacateBed = asyncHandler(async (req, res) => {
       if (notes !== undefined) tenant.vacateNotes = notes || null;
 
       // Apply deposit state changes inside the transaction
-      if (depositAction === 'adjust' && depositAdjustedAmount > 0) {
+      if ((depositAction === 'adjust' || depositAction === 'adjust_and_refund') && depositAdjustedAmount > 0) {
         const prevBal = tenant.depositBalance ?? tenant.depositAmount ?? 0;
         const newBal  = Math.max(0, prevBal - depositAdjustedAmount);
-        tenant.depositBalance = newBal;
-        tenant.depositStatus  = newBal > 0 ? 'held' : 'adjusted';
+        if (depositAction === 'adjust_and_refund') {
+          // Adjust against dues + mark full remainder as refunded
+          tenant.depositBalance  = 0;
+          tenant.depositStatus   = 'refunded';
+          tenant.depositReturned = true;
+        } else {
+          tenant.depositBalance = newBal;
+          tenant.depositStatus  = newBal > 0 ? 'held' : 'adjusted';
+        }
       } else if (depositAction === 'refund') {
         const depBal = tenant.depositBalance ?? tenant.depositAmount ?? 0;
         const refAmt = refundAmount > 0 ? Math.min(Number(refundAmount), depBal) : depBal;
         tenant.depositBalance  = Math.max(0, depBal - refAmt);
         tenant.depositStatus   = tenant.depositBalance > 0 ? 'held' : 'refunded';
         tenant.depositReturned = tenant.depositBalance === 0;
+      } else if (depositAction === 'forfeit') {
+        tenant.depositBalance  = 0;
+        tenant.depositStatus   = 'forfeited';
+        tenant.depositReturned = false;
       }
 
       await tenant.save({ session });
@@ -757,18 +858,54 @@ const vacateBed = asyncHandler(async (req, res) => {
   }
 
   // ── Deposit audit ledger entries (after transaction) ────────────────────────
-  if (depositAction === 'adjust' && depositAdjustedAmount > 0) {
+  if (depositAction === 'forfeit') {
+    if (preForfeitDepositBalance > 0) {
+      const freshAfterForfeit = await Tenant.findById(tenant._id).select('ledgerBalance').lean();
+      await LedgerEntry.create({
+        tenant:        tenant._id,
+        property:      req.params.propertyId,
+        type:          'debit',
+        amount:        preForfeitDepositBalance,
+        balanceAfter:  freshAfterForfeit?.ledgerBalance ?? 0,
+        referenceType: 'deposit_forfeited',
+        referenceId:   tenant._id,
+        description:   `Security deposit ₹${preForfeitDepositBalance} forfeited at vacate — kept by property`,
+      });
+      logger.info('bed.vacate.deposit_forfeited', { traceId, tenantId: tenant._id, amount: preForfeitDepositBalance });
+    }
+  } else if ((depositAction === 'adjust' || depositAction === 'adjust_and_refund') && depositAdjustedAmount > 0) {
+    const freshAfterAdj = await Tenant.findById(tenant._id).select('ledgerBalance depositBalance').lean();
     await LedgerEntry.create({
       tenant:        tenant._id,
       property:      req.params.propertyId,
       type:          'credit',
       amount:        depositAdjustedAmount,
-      balanceAfter:  tenant.ledgerBalance ?? 0,  // balance already updated by allocatePayment
+      balanceAfter:  freshAfterAdj?.ledgerBalance ?? 0,
       referenceType: 'deposit_adjusted',
       referenceId:   tenant._id,
       method:        'deposit_adjustment',
       description:   `Security deposit ₹${depositAdjustedAmount} adjusted against dues at vacate`,
     });
+    // For adjust_and_refund, also write the refund entry for the surplus
+    if (depositAction === 'adjust_and_refund') {
+      const preAdjustBal  = preForfeitDepositBalance;  // captured before any modifications
+      const surplusRefund = Math.max(0, preAdjustBal - depositAdjustedAmount);
+      if (surplusRefund > 0) {
+        const methodLabel = refundMethod ?? 'cash';
+        await LedgerEntry.create({
+          tenant:        tenant._id,
+          property:      req.params.propertyId,
+          type:          'credit',
+          amount:        surplusRefund,
+          balanceAfter:  freshAfterAdj?.ledgerBalance ?? 0,
+          referenceType: 'deposit_refunded',
+          referenceId:   tenant._id,
+          method:        methodLabel,
+          description:   `Security deposit surplus ₹${surplusRefund} refunded to tenant at vacate via ${methodLabel}`,
+        });
+        logger.info('bed.vacate.deposit_surplus_refunded', { traceId, tenantId: tenant._id, surplusRefund });
+      }
+    }
   } else if (depositAction === 'refund') {
     const depBal      = tenant.depositBalance ?? tenant.depositAmount ?? 0;
     const refundedAmt = refundAmount > 0
@@ -852,7 +989,7 @@ const reserveBed = asyncHandler(async (req, res) => {
   let tenant;
 
   if (tenantId) {
-    // ── Path A: existing tenant (active / notice / lead) ─────────────────────
+    // ── Path A: existing tenant (active / notice / reserved) ─────────────────
     tenant = await Tenant.findOne({ _id: tenantId, property: req.params.propertyId });
     if (!tenant) {
       return res.status(404).json({
@@ -884,7 +1021,7 @@ const reserveBed = asyncHandler(async (req, res) => {
       });
     }
   } else {
-    // ── Path B: find-or-create a lead tenant by phone ─────────────────────────
+    // ── Path B: find-or-create a reserved tenant by phone ────────────────────
     if (!phone || !phone.trim()) {
       return res.status(400).json({
         success: false,
@@ -916,11 +1053,11 @@ const reserveBed = asyncHandler(async (req, res) => {
       });
     }
 
-    // Reuse an existing lead with the same phone, or create one
+    // Reuse an existing reserved tenant with the same phone, or create one
     const existingLead = await Tenant.findOne({
       property: req.params.propertyId,
       phone:    phone.trim(),
-      status:   'lead',
+      status:   'reserved',
     });
 
     if (existingLead) {
@@ -931,7 +1068,7 @@ const reserveBed = asyncHandler(async (req, res) => {
         property:    req.params.propertyId,
         name:        name.trim(),
         phone:       phone.trim(),
-        status:      'lead',
+        status:      'reserved',
         checkInDate: moveInDate ? new Date(moveInDate) : new Date(),
         rentAmount:  0,
       });
@@ -977,7 +1114,7 @@ const reserveBed = asyncHandler(async (req, res) => {
           tenant:       null,
           reservation:  {
             tenantId: null, name: null, phone: null, moveInDate: null, notes: null,
-            source:            'lead',
+            source:            'reserved',
             reservationAmount: oldAdvAmt,
             reservationMode:   oldAdvAmt > 0 ? oldAdvMode : null,
             reservationStatus: oldAdvAmt > 0 ? 'cancelled' : null,
@@ -986,24 +1123,24 @@ const reserveBed = asyncHandler(async (req, res) => {
       }
     );
 
-    // Refund any held advance when the reservation is displaced
+    // Reverse the advance credit that was written when the displaced reservation was created
     if (oldAdvAmt > 0 && existingReservedBed.tenant) {
       const replacedTenant = await Tenant.findById(existingReservedBed.tenant).select('ledgerBalance property');
       if (replacedTenant) {
         const prevBal = replacedTenant.ledgerBalance ?? 0;
-        const newBal  = prevBal - oldAdvAmt;
+        const newBal  = prevBal + oldAdvAmt;   // debit reverses the earlier credit
         await LedgerEntry.create({
           tenant:        replacedTenant._id,
           property:      replacedTenant.property,
-          type:          'credit',
+          type:          'debit',
           amount:        oldAdvAmt,
           balanceAfter:  newBal,
-          referenceType: 'refund',
+          referenceType: 'reservation_refunded',
           referenceId:   existingReservedBed._id,
-          description:   `Reservation advance refunded — reservation replaced by another bed (${oldAdvMode} mode)`,
+          description:   `Reservation advance returned — reservation replaced by another bed (${oldAdvMode} mode)`,
         });
-        await Tenant.updateOne({ _id: replacedTenant._id }, { $set: { ledgerBalance: newBal } });
-        logger.info('bed.reservation.replaced.advance_refunded', {
+        await Tenant.updateOne({ _id: replacedTenant._id }, { $set: { ledgerBalance: newBal, reservationAmount: 0 } });
+        logger.info('bed.reservation.replaced.advance_reversed', {
           cancelledBedId: existingReservedBed._id, tenantId: replacedTenant._id, amount: oldAdvAmt,
         });
       }
@@ -1019,7 +1156,7 @@ const reserveBed = asyncHandler(async (req, res) => {
 
   // ── Link bed ↔ tenant ─────────────────────────────────────────────────────
   tenant.bed = bed._id;
-  if (tenant.status === 'lead' && moveInDate) {
+  if (tenant.status === 'reserved' && moveInDate) {
     tenant.checkInDate = new Date(moveInDate);
   }
   await tenant.save();
@@ -1033,12 +1170,42 @@ const reserveBed = asyncHandler(async (req, res) => {
     phone:             tenant.phone,
     moveInDate:        moveInDate ? new Date(moveInDate) : null,
     notes:             notes || null,
-    source:            tenantId ? 'existing_tenant' : 'lead',
+    source:            tenantId ? 'existing_tenant' : 'reserved',
     reservationAmount: advAmt,
     reservationMode:   advMode,
     reservationStatus: advAmt > 0 ? 'held' : null,
   };
   await bed.save();
+
+  // ── Record advance collection in ledger immediately ──────────────────────
+  // Storing the amount only on bed.reservation is invisible to the financial
+  // system. Write a credit entry now so the money shows up in the ledger as
+  // soon as it is collected, regardless of when the tenant is assigned.
+  if (advAmt > 0) {
+    try {
+      const freshTenant  = await Tenant.findById(tenant._id).select('ledgerBalance').lean();
+      const prevBal      = freshTenant?.ledgerBalance ?? 0;
+      const newBal       = prevBal - advAmt;  // credit reduces outstanding balance
+      await LedgerEntry.create({
+        tenant:        tenant._id,
+        property:      req.params.propertyId,
+        type:          'credit',
+        amount:        advAmt,
+        balanceAfter:  newBal,
+        referenceType: 'reservation_paid',
+        referenceId:   bed._id,
+        description:   `Reservation advance collected (${advMode} mode) — Room ${room.roomNumber} Bed ${bed.bedNumber}`,
+      });
+      await Tenant.updateOne({ _id: tenant._id }, { $set: { ledgerBalance: newBal, reservationAmount: advAmt } });
+      logger.info('bed.reserved.advance_recorded', {
+        bedId: bed._id, tenantId: tenant._id, amount: advAmt, mode: advMode, newBal,
+      });
+    } catch (advErr) {
+      logger.warn('bed.reserved.advance_record_failed', {
+        bedId: bed._id, tenantId: tenant._id, error: advErr.message,
+      });
+    }
+  }
 
   logger.info('bed.reserved', {
     bedId:             bed._id,
@@ -1081,12 +1248,19 @@ const cancelReservation = asyncHandler(async (req, res) => {
   const cancelAdvMode   = bed.reservation?.reservationMode   ?? null;
   const cancelTenantId  = bed.tenant;
 
-  // Clean up the linked lead tenant (do not touch active/notice tenants)
+  // forfeit=true → property keeps the advance (no physical refund).
+  // forfeit=false (default) → advance is returned to the tenant.
+  // In both cases we write a debit to reverse the earlier credit so the
+  // cancelled tenant's balance returns to 0. The difference is the label.
+  const forfeit = req.body.forfeit === true || req.body.forfeit === 'true';
+
+  // Clean up the linked reserved tenant (do not touch active/notice tenants)
   if (bed.tenant) {
-    const linkedTenant = await Tenant.findOne({ _id: bed.tenant, status: 'lead' });
+    const linkedTenant = await Tenant.findOne({ _id: bed.tenant, status: 'reserved' });
     if (linkedTenant) {
-      linkedTenant.status = 'vacated';
-      linkedTenant.bed    = null;
+      linkedTenant.status            = 'vacated';
+      linkedTenant.bed               = null;
+      linkedTenant.reservationAmount = 0;
       await linkedTenant.save();
     } else {
       // Existing active/notice tenant was linked — just clear their bed ref
@@ -1105,38 +1279,45 @@ const cancelReservation = asyncHandler(async (req, res) => {
     phone:             null,
     moveInDate:        null,
     notes:             null,
-    source:            'lead',
+    source:            'reserved',
     reservationAmount: cancelAdvAmt,
     reservationMode:   cancelAdvAmt > 0 ? cancelAdvMode : null,
     reservationStatus: cancelAdvAmt > 0 ? 'cancelled' : null,
   };
   await bed.save();
 
-  // ── Record refund ledger entry (both adjust and refund modes) ─────────────
+  // ── Write ledger entry to reverse the advance credit ──────────────────────
+  // Whether refunded or forfeited, the cancelled tenant's balance must return
+  // to 0. Write a debit to cancel the credit that was written at reserve time.
   if (cancelAdvAmt > 0 && cancelTenantId) {
     const refundTenant = await Tenant.findById(cancelTenantId).select('ledgerBalance property');
     if (refundTenant) {
       const prevBalance = refundTenant.ledgerBalance ?? 0;
-      // A refund is a credit that reduces the tenant's balance (they get money back)
-      const newBalance  = prevBalance - cancelAdvAmt;
+      const newBalance  = prevBalance + cancelAdvAmt;   // debit reverses the earlier credit
       await LedgerEntry.create({
         tenant:        refundTenant._id,
         property:      refundTenant.property,
-        type:          'credit',
+        type:          'debit',
         amount:        cancelAdvAmt,
         balanceAfter:  newBalance,
-        referenceType: 'refund',
+        referenceType: forfeit ? 'reservation_forfeited' : 'reservation_refunded',
         referenceId:   bed._id,
-        description:   `Reservation advance refund on cancellation (${cancelAdvMode} mode)`,
+        description:   forfeit
+          ? `Reservation advance ₹${cancelAdvAmt} forfeited on cancellation — kept by property`
+          : `Reservation advance ₹${cancelAdvAmt} returned on cancellation (${cancelAdvMode} mode)`,
       });
-      await Tenant.updateOne({ _id: refundTenant._id }, { $set: { ledgerBalance: newBalance } });
-      logger.info('bed.cancel.advance_refunded', {
-        tenantId: refundTenant._id, amount: cancelAdvAmt, newBalance, mode: cancelAdvMode,
+      await Tenant.updateOne({ _id: refundTenant._id }, { $set: { ledgerBalance: newBalance, reservationAmount: 0 } });
+      logger.info('bed.cancel.advance_settled', {
+        tenantId: refundTenant._id, amount: cancelAdvAmt, newBalance, mode: cancelAdvMode, forfeit,
       });
     }
   }
 
-  res.json({ success: true, message: 'Reservation cancelled', data: bed });
+  res.json({
+    success: true,
+    message: forfeit ? 'Reservation cancelled — advance forfeited' : 'Reservation cancelled',
+    data: bed,
+  });
 });
 
 // PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/block
@@ -1168,12 +1349,13 @@ const blockBed = asyncHandler(async (req, res) => {
   }
 
   const wasReserved = bed.status === 'reserved';
-  // Clean up lead tenant when blocking a reserved bed
+  // Clean up reserved tenant when blocking a reserved bed
   if (wasReserved && bed.tenant) {
-    const linkedTenant = await Tenant.findOne({ _id: bed.tenant, status: 'lead' });
+    const linkedTenant = await Tenant.findOne({ _id: bed.tenant, status: 'reserved' });
     if (linkedTenant) {
-      linkedTenant.status = 'vacated';
-      linkedTenant.bed    = null;
+      linkedTenant.status            = 'vacated';
+      linkedTenant.bed               = null;
+      linkedTenant.reservationAmount = 0;
       await linkedTenant.save();
     } else {
       await Tenant.updateOne({ _id: bed.tenant }, { $set: { bed: null } });
@@ -1183,7 +1365,7 @@ const blockBed = asyncHandler(async (req, res) => {
   if (wasReserved) {
     bed.reservedTill = null;
     bed.tenant       = null;
-    bed.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null, source: 'lead' };
+    bed.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null, source: 'reserved' };
   }
   const { blockReason, blockNotes } = req.body;
   bed.blockReason = blockReason || null;
@@ -1442,11 +1624,11 @@ const changeBed = asyncHandler(async (req, res) => {
       code: 'TARGET_BED_BLOCKED',
     });
   }
-  if (targetBed.status !== 'vacant' && targetBed.status !== 'reserved') {
+  if (targetBed.status !== 'vacant') {
     return res.status(409).json({
       success: false,
-      message: `Target bed status '${targetBed.status}' does not allow assignment`,
-      code: 'INVALID_STATE',
+      message: `Target bed must be vacant for a room transfer. Current status: '${targetBed.status}'.`,
+      code: 'TARGET_BED_NOT_VACANT',
     });
   }
 
@@ -1475,8 +1657,24 @@ const changeBed = asyncHandler(async (req, res) => {
     });
   }
 
+  // ── Capacity check — count current normal occupied beds in target room ────────
+  const targetRoomOccupied = await Bed.countDocuments({
+    room:     targetBed.room,
+    isActive: true,
+    status:   'occupied',
+    isExtra:  false,
+  });
+  if (targetRoomOccupied >= targetRoom.capacity) {
+    return res.status(409).json({
+      success: false,
+      message: `Target room is at full capacity (${targetRoom.capacity} bed${targetRoom.capacity !== 1 ? 's' : ''}, all occupied).`,
+      code: 'TARGET_ROOM_AT_CAPACITY',
+    });
+  }
+
   const traceId  = crypto.randomUUID();
   const sameRoom = String(sourceBed.room) === String(targetBed.room);
+  const fromRent = tenant.rentAmount; // capture before transaction overwrites it
 
   logger.info('bed.change.start', {
     traceId,
@@ -1532,7 +1730,96 @@ const changeBed = asyncHandler(async (req, res) => {
   }
 
   const updatedTargetBed = await Bed.findById(targetBed._id)
-    .populate('tenant', 'name phone status rentAmount billingSnapshot');
+    .populate('tenant', 'name phone status rentAmount billingSnapshot ledgerBalance');
+
+  // ── Reset current billing cycle to new rent (no proration) ──────────────────
+  // 1. Updates the current month's open RentPayment.amount to the new rent.
+  // 2. If the amount changed, writes a LedgerEntry adjustment so getTenantLedger
+  //    (the source of truth) stays in sync — this is the field the profile reads.
+  // 3. Recomputes tenant.ledgerBalance from all open records.
+  // Past paid records are never touched.
+  const newRent = updatedTargetBed?.tenant?.rentAmount ?? 0;
+  try {
+    const now      = new Date();
+    const curMonth = now.getMonth() + 1;
+    const curYear  = now.getFullYear();
+
+    const currentRecord = await RentPayment.findOne({
+      tenant: tenant._id,
+      month:  curMonth,
+      year:   curYear,
+      status: { $in: ['pending', 'partial', 'overdue'] },
+    });
+
+    if (currentRecord) {
+      const oldBilledAmount = currentRecord.amount;
+      const delta           = newRent - oldBilledAmount; // positive = increase, negative = decrease
+
+      currentRecord.amount = newRent;
+      await currentRecord.save(); // pre-save hook recalculates .balance
+
+      // Keep LedgerEntry (source of truth) in sync with the billing change
+      if (delta !== 0) {
+        const prevLedgerBalance = await rentService.getTenantBalance(tenant._id);
+        const adjustedBalance   = prevLedgerBalance + delta;
+
+        await LedgerEntry.create({
+          tenant:        tenant._id,
+          property:      req.params.propertyId,
+          type:          delta > 0 ? 'debit' : 'credit',
+          amount:        Math.abs(delta),
+          balanceAfter:  adjustedBalance,
+          referenceType: 'adjustment',
+          referenceId:   tenant._id,
+          description:   `Rent adjusted on room transfer: Room ${room.roomNumber} → Room ${targetRoom.roomNumber}`,
+        });
+
+        await Tenant.updateOne({ _id: tenant._id }, { ledgerBalance: adjustedBalance });
+        logger.info('bed.change.rent_reset', {
+          traceId, tenantId: tenant._id,
+          month: curMonth, year: curYear,
+          oldBilledAmount, newRent, delta, adjustedBalance,
+        });
+      }
+    } else {
+      // No current-cycle record yet — just sync ledgerBalance from open records
+      const openRecords = await RentPayment.find({
+        tenant: tenant._id,
+        status: { $in: ['pending', 'partial', 'overdue'] },
+      }).select('amount paidAmount').lean();
+
+      const newLedgerBalance = openRecords.reduce(
+        (sum, r) => sum + (r.amount - (r.paidAmount ?? 0)), 0
+      );
+      await Tenant.updateOne({ _id: tenant._id }, { ledgerBalance: newLedgerBalance });
+    }
+  } catch (err) {
+    logger.warn('bed.change.rent_reset_failed', { traceId, tenantId: tenant._id, error: err.message });
+  }
+
+  // ── Persist transfer history (non-blocking — audit trail only) ────────────────
+  const toRent = updatedTargetBed?.tenant?.rentAmount ?? 0;
+  Tenant.findByIdAndUpdate(tenant._id, {
+    $push: {
+      transferHistory: {
+        fromBed:        sourceBed._id,
+        fromRoom:       room._id,
+        toBed:          targetBed._id,
+        toRoom:         targetRoom._id,
+        fromBedNumber:  sourceBed.bedNumber,
+        fromRoomNumber: room.roomNumber,
+        toBedNumber:    targetBed.bedNumber,
+        toRoomNumber:   targetRoom.roomNumber,
+        fromRent,
+        toRent,
+        changedBy:      req.user._id,
+        traceId,
+        transferredAt:  new Date(),
+      },
+    },
+  }).catch((err) =>
+    logger.warn('bed.change.history_write_failed', { traceId, tenantId: tenant._id, error: err.message })
+  );
 
   logger.info('bed.changed', {
     traceId,
@@ -1729,6 +2016,198 @@ const rentPreview = asyncHandler(async (req, res) => {
   });
 });
 
+// PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/move-reservation
+// Body: { targetBedId }
+// Moves a reservation from a reserved bed to a different vacant bed.
+// Simpler than changeBed — no rent recalculation (tenant is still a lead, not active).
+const moveReservation = asyncHandler(async (req, res) => {
+  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  if (!room) {
+    return res.status(404).json({ success: false, message: 'Room not found' });
+  }
+
+  const { targetBedId } = req.body;
+  if (!targetBedId) {
+    return res.status(400).json({ success: false, message: 'targetBedId is required', code: 'MISSING_FIELD' });
+  }
+
+  const sourceBed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true });
+  if (!sourceBed) {
+    return res.status(404).json({ success: false, message: 'Source bed not found', code: 'BED_NOT_FOUND' });
+  }
+  if (sourceBed.status !== 'reserved') {
+    return res.status(400).json({
+      success: false,
+      message: `Can only move a reservation from a reserved bed. Current status: '${sourceBed.status}'`,
+      code: 'INVALID_STATE',
+    });
+  }
+
+  if (String(targetBedId) === String(sourceBed._id)) {
+    return res.status(400).json({ success: false, message: 'Target bed is the same as source bed', code: 'SAME_BED' });
+  }
+
+  const targetBed = await Bed.findOne({ _id: targetBedId, property: req.params.propertyId, isActive: true });
+  if (!targetBed) {
+    return res.status(404).json({ success: false, message: 'Target bed not found', code: 'TARGET_BED_NOT_FOUND' });
+  }
+  if (targetBed.status !== 'vacant') {
+    return res.status(409).json({
+      success: false,
+      message: `Target bed must be vacant. Current status: '${targetBed.status}'`,
+      code: 'TARGET_BED_NOT_VACANT',
+    });
+  }
+
+  const traceId = crypto.randomUUID();
+  logger.info('bed.move_reservation.start', {
+    traceId,
+    sourceBedId: sourceBed._id,
+    targetBedId: targetBed._id,
+    tenantId: sourceBed.tenant,
+    userId: req.user._id,
+  });
+
+  try {
+    await runWithRetry(async (session) => {
+      // Copy reservation data to target bed and mark it reserved
+      targetBed.status       = 'reserved';
+      targetBed.tenant       = sourceBed.tenant;
+      targetBed.reservedTill = sourceBed.reservedTill;
+      targetBed.reservation  = { ...(sourceBed.reservation?.toObject?.() ?? sourceBed.reservation ?? {}) };
+      await targetBed.save({ session });
+
+      // Free the source bed
+      sourceBed.status       = 'vacant';
+      sourceBed.tenant       = null;
+      sourceBed.reservedTill = null;
+      sourceBed.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null };
+      await sourceBed.save({ session });
+
+      // Point the lead tenant's bed reference at the new bed (if it was set)
+      if (sourceBed.tenant) {
+        await Tenant.updateOne(
+          { _id: sourceBed.tenant, status: { $in: ['reserved', 'vacated'] } },
+          { $set: { bed: targetBed._id } },
+          { session }
+        );
+      }
+    });
+  } catch (err) {
+    logger.error('bed.move_reservation.transaction_failed', {
+      traceId, sourceBedId: sourceBed._id, targetBedId: targetBed._id, error: err.message,
+    });
+    throw err;
+  }
+
+  logger.info('bed.move_reservation.done', {
+    traceId, sourceBedId: sourceBed._id, targetBedId: targetBed._id, tenantId: sourceBed.tenant,
+  });
+
+  const updatedTarget = await Bed.findById(targetBed._id)
+    .populate('tenant', 'name phone status checkInDate');
+  res.json({
+    success: true,
+    message: 'Reservation moved successfully',
+    data: updatedTarget,
+  });
+});
+
+// PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/deposit-adjust
+// Mid-stay: apply a portion of depositBalance against outstanding rent dues.
+const midStayDepositAdjust = asyncHandler(async (req, res) => {
+  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  if (!room) return res.status(404).json({ success: false, message: 'Room not found' });
+
+  const bed = await fetchBed(req.params.id, req.params.roomId);
+  if (!bed) return res.status(404).json({ success: false, message: 'Bed not found' });
+
+  if (bed.status !== 'occupied' || !bed.tenant) {
+    return res.status(400).json({ success: false, message: 'Bed has no active tenant', code: 'INVALID_STATE' });
+  }
+
+  const tenant = await Tenant.findById(bed.tenant);
+  if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
+
+  const depositBal = tenant.depositBalance ?? 0;
+  if (depositBal <= 0) {
+    return res.status(400).json({ success: false, message: 'No deposit balance to adjust', code: 'NO_DEPOSIT' });
+  }
+
+  const { amount } = req.body;
+  const adjustAmt = amount ? Number(amount) : depositBal;
+
+  if (!adjustAmt || adjustAmt <= 0) {
+    return res.status(400).json({ success: false, message: 'amount must be positive', code: 'INVALID_AMOUNT' });
+  }
+  if (adjustAmt > depositBal) {
+    return res.status(400).json({
+      success: false,
+      message: `Amount ₹${adjustAmt} exceeds deposit balance ₹${depositBal}`,
+      code: 'EXCEEDS_DEPOSIT',
+    });
+  }
+
+  // Check there are outstanding dues to apply against
+  const openRents = await RentPayment.find({
+    tenant:   tenant._id,
+    property: req.params.propertyId,
+    status:   { $in: ['pending', 'partial', 'overdue'] },
+  }).lean();
+  const pendingTotal = openRents.reduce((s, r) => s + (r.amount - (r.paidAmount ?? 0)), 0);
+  if (pendingTotal <= 0) {
+    return res.status(400).json({ success: false, message: 'No outstanding dues to adjust against', code: 'NO_DUES' });
+  }
+
+  const applyAmt = Math.min(adjustAmt, pendingTotal);
+  const traceId  = crypto.randomUUID();
+
+  try {
+    await rentService.allocatePayment(req.params.propertyId, tenant._id, {
+      amount:      applyAmt,
+      method:      'deposit_adjustment',
+      notes:       'Mid-stay deposit adjustment',
+      paymentDate: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error('bed.deposit_adjust.failed', { traceId, tenantId: tenant._id, error: err.message });
+    return res.status(400).json({ success: false, message: err.message || 'Failed to apply deposit', code: 'ADJUSTMENT_ERROR' });
+  }
+
+  // Update deposit balance
+  const newDepositBal = Math.max(0, depositBal - applyAmt);
+  await Tenant.updateOne(
+    { _id: tenant._id },
+    { $set: { depositBalance: newDepositBal, depositStatus: newDepositBal > 0 ? 'held' : 'adjusted' } }
+  );
+
+  // Audit ledger entry
+  const freshTenant = await Tenant.findById(tenant._id).select('ledgerBalance').lean();
+  await LedgerEntry.create({
+    tenant:        tenant._id,
+    property:      req.params.propertyId,
+    type:          'credit',
+    amount:        applyAmt,
+    balanceAfter:  freshTenant?.ledgerBalance ?? 0,
+    referenceType: 'deposit_adjusted',
+    referenceId:   tenant._id,
+    method:        'deposit_adjustment',
+    description:   `Security deposit ₹${applyAmt} applied against outstanding dues (mid-stay)`,
+  });
+
+  logger.info('bed.deposit_adjust.done', { traceId, tenantId: tenant._id, applyAmt, newDepositBal });
+
+  res.json({
+    success: true,
+    message: `₹${applyAmt.toLocaleString('en-IN')} applied from deposit against dues`,
+    data: {
+      appliedAmount:  applyAmt,
+      depositBalance: newDepositBal,
+      depositStatus:  newDepositBal > 0 ? 'held' : 'adjusted',
+    },
+  });
+});
+
 module.exports = {
   getBeds,
   getBed,
@@ -1744,6 +2223,7 @@ module.exports = {
   blockBed,
   unblockBed,
   changeBed,
+  moveReservation,
   getRoomAnalytics,
   getRoomFinancials,
   getRoomActivity,
@@ -1751,6 +2231,7 @@ module.exports = {
   bulkUnblockBeds,
   rentPreview,
   bulkVacateBeds,
+  midStayDepositAdjust,
   // Backward-compat aliases
   assignTenant:   assignBed,
   checkoutTenant: vacateBed,

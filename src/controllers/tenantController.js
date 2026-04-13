@@ -13,7 +13,7 @@ const findPhoneConflict = (propertyId, phone, excludeId = null) => {
   const filter = {
     property: propertyId,
     phone:    phone.trim(),
-    status:   { $in: ['active', 'notice', 'lead'] },
+    status:   { $in: ['active', 'notice', 'reserved'] },
   };
   if (excludeId) filter._id = { $ne: excludeId };
   return Tenant.findOne(filter).select('_id name phone status').lean();
@@ -55,8 +55,14 @@ const searchTenants = asyncHandler(async (req, res) => {
     else if (statuses.length > 1) filter.status = { $in: statuses };
   }
 
-  // Assignable: only tenants with no bed assigned
-  if (assignable === 'true') filter.bed = null;
+  // Assignable: only tenants with no bed assigned (OR the reserved tenant linked to the bed being confirmed)
+  // reservedBedId allows the reserved tenant of a bed to appear in the confirm flow.
+  const { reservedBedId } = req.query;
+  if (assignable === 'true') {
+    filter.bed = reservedBedId
+      ? { $in: [null, reservedBedId] }
+      : null;
+  }
 
   // ExcludeReserved: exclude tenants who already hold an active reservation elsewhere
   if (excludeReserved === 'true') {
@@ -285,7 +291,7 @@ const vacateTenant = asyncHandler(async (req, res) => {
       bedDoc.tenant = null;
       if (wasReserved || String(bedDoc.reservation?.tenantId) === String(tenant._id)) {
         bedDoc.reservedTill = null;
-        bedDoc.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null, source: 'lead' };
+        bedDoc.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null, source: 'reserved' };
       }
       await bedDoc.save();
     }
@@ -364,7 +370,7 @@ const applyTenantAdvance = asyncHandler(async (req, res) => {
     type:          'credit',
     amount:        advAmt,
     balanceAfter:  newBalance,
-    referenceType: 'reservation_advance',
+    referenceType: 'reservation_paid',
     referenceId:   bed._id,
     description:   `Reservation advance manually applied to rent (${advMode} mode)`,
   });
@@ -408,12 +414,12 @@ const refundTenantAdvance = asyncHandler(async (req, res) => {
     type:          'credit',
     amount:        advAmt,
     balanceAfter:  newBalance,
-    referenceType: 'refund',
+    referenceType: 'reservation_refunded',
     referenceId:   bed._id,
     description:   `Reservation advance manually refunded to tenant (${advMode} mode)`,
   });
 
-  await Tenant.updateOne({ _id: tenant._id }, { $set: { ledgerBalance: newBalance } });
+  await Tenant.updateOne({ _id: tenant._id }, { $set: { ledgerBalance: newBalance, reservationAmount: 0 } });
   bed.reservation.reservationStatus = 'cancelled';
   await bed.save();
 

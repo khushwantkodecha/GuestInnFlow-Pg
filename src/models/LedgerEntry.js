@@ -48,7 +48,25 @@ const ledgerEntrySchema = new mongoose.Schema(
     // Link back to the originating document
     referenceType: {
       type: String,
-      enum: ['rent_record', 'payment', 'adjustment', 'reservation_advance', 'refund', 'deposit_collected', 'deposit_adjusted', 'deposit_refunded'],
+      enum: [
+        // ── Current canonical names ──────────────────────────────────────────
+        'rent_generated',          // debit: rent cycle created for tenant
+        'payment_received',        // credit: payment collected against rent
+        'reservation_paid',        // credit: advance/token collected at reservation
+        'reservation_adjusted',    // debit: reverses reservation_paid credit (e.g. converting to deposit)
+        'reservation_refunded',    // debit: reservation advance returned to tenant
+        'reservation_forfeited',   // debit: advance forfeited (tenant no-show / cancellation)
+        'deposit_collected',       // audit-only: security deposit received
+        'deposit_adjusted',        // credit: deposit applied against outstanding dues
+        'deposit_refunded',        // credit: deposit returned to tenant at vacate
+        'deposit_forfeited',       // debit: deposit forfeited at vacate
+        // ── Legacy names (kept for backward compatibility with existing records) ──
+        'rent_record',
+        'payment',
+        'adjustment',
+        'reservation_advance',
+        'refund',
+      ],
       required: true,
     },
     referenceId: {

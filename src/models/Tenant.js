@@ -61,9 +61,18 @@ const tenantSchema = new mongoose.Schema(
       idVerified:               { type: Boolean, default: false },
       emergencyContactVerified: { type: Boolean, default: false },
     },
+    // ── Reservation amount (token/advance collected at reservation time) ────────
+    // Mirrored from bed.reservation.reservationAmount at reservation time.
+    // Cleared (set to 0) when the advance is disposed at check-in.
+    reservationAmount: {
+      type:    Number,
+      default: 0,
+      min:     0,
+    },
+
     checkInDate: {
       type: Date,
-      default: null,   // set during bed assignment; null for 'lead' tenants
+      default: null,   // set during bed assignment; null for 'reserved' tenants
     },
     checkOutDate: {
       type: Date,
@@ -71,15 +80,23 @@ const tenantSchema = new mongoose.Schema(
     },
     rentAmount: {
       type: Number,
-      default: 0,      // set during bed assignment; 0 for 'lead' tenants
+      default: 0,      // set during bed assignment; 0 for 'reserved' tenants
       min: 0,
+    },
+    // billingStartDate: immutable anchor for the personal billing cycle.
+    // Set to checkInDate on first bed assignment and never changed on room transfer.
+    // billingDay = billingStartDate.getDate(); cycle starts on this day each month.
+    billingStartDate: {
+      type: Date,
+      default: null,
     },
     dueDate: {
       type: Number,
-      min: 1,
+      min: 0,
       max: 28,
-      default: 1,
-      // Day of month on which rent is due (1–28)
+      default: 5,
+      // Grace days after billing cycle start before rent is considered due (0–28).
+      // e.g. billingDay=13, graceDays=5 → rent due on the 18th.
     },
     depositAmount: {
       type: Number,
@@ -97,7 +114,7 @@ const tenantSchema = new mongoose.Schema(
     },
     depositStatus: {
       type: String,
-      enum: ['held', 'adjusted', 'refunded', null],
+      enum: ['held', 'adjusted', 'refunded', 'forfeited', null],
       default: null,
     },
     // Billing snapshot — updated on every rent recalculation event
@@ -117,6 +134,24 @@ const tenantSchema = new mongoose.Schema(
       traceId:         { type: String },   // UUID linking log lines to this recalc event
       assignedAt:      { type: Date },
     },
+    // Append-only transfer history — one entry written on every room/bed change.
+    transferHistory: [
+      {
+        fromBed:        { type: mongoose.Schema.Types.ObjectId, ref: 'Bed' },
+        fromRoom:       { type: mongoose.Schema.Types.ObjectId, ref: 'Room' },
+        toBed:          { type: mongoose.Schema.Types.ObjectId, ref: 'Bed' },
+        toRoom:         { type: mongoose.Schema.Types.ObjectId, ref: 'Room' },
+        fromBedNumber:  { type: String },
+        fromRoomNumber: { type: String },
+        toBedNumber:    { type: String },
+        toRoomNumber:   { type: String },
+        fromRent:       { type: Number },
+        toRent:         { type: Number },
+        changedBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        traceId:        { type: String },
+        transferredAt:  { type: Date, default: Date.now },
+      },
+    ],
     // Append-only rent history — one entry written on every recalculation.
     // Each entry records the full before/after state so any point in time can
     // be reconstructed without scanning the whole collection.
@@ -134,7 +169,8 @@ const tenantSchema = new mongoose.Schema(
     ],
     status: {
       type: String,
-      enum: ['active', 'vacated', 'notice', 'merged', 'lead'],
+      // 'reserved' = bed held, not yet moved in (was 'lead')
+      enum: ['active', 'vacated', 'notice', 'merged', 'reserved'],
       default: 'active',
     },
     // Set when this tenant record was absorbed into another via the merge flow.
@@ -171,7 +207,7 @@ tenantSchema.index(
   { property: 1, phone: 1 },
   {
     unique: true,
-    partialFilterExpression: { status: { $in: ['active', 'notice', 'lead'] } },
+    partialFilterExpression: { status: { $in: ['active', 'notice', 'reserved'] } },
     name: 'unique_active_phone_per_property',
   }
 );

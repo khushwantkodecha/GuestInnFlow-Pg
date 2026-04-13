@@ -7,6 +7,7 @@ const assignBedSchema = z.object({
   rentOverride: z.number().min(0).max(100000).optional(),
   deposit:      z.number().min(0).max(1000000).optional(),
   moveInDate:   z.string().refine(v => !isNaN(Date.parse(v)), { message: 'Invalid moveInDate' }).optional(),
+  dueDate:      z.number().int().min(0).max(28).optional(),  // grace days (0–28)
 })
 
 const reserveBedSchema = z.object({

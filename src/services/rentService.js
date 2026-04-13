@@ -19,11 +19,45 @@ const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Build the exact due-date for a given tenant, month, and year.
- * Tenant.dueDate is a day-of-month (1–28).
+ * computePersonalCycle
+ *
+ * Given a tenant's billing anchor date and a target calendar month/year,
+ * returns the personal billing cycle dates for that month.
+ *
+ * The billingDay is derived from billingStartDate (or checkInDate fallback).
+ * Capped at the last day of the target month so short months (Feb, etc.) work.
+ *
+ * @param {Date|null} billingStartDate  — immutable anchor (set at first assignment)
+ * @param {Date|null} checkInDate       — fallback anchor
+ * @param {number}    month             — 1–12
+ * @param {number}    year
+ * @param {number}    graceDays         — tenant.dueDate (0–28, default 5)
+ * @returns {{ cycleStart, cycleEnd, dueDate, billingDay }}
  */
-const buildDueDate = (dueDayOfMonth, month, year) =>
-  new Date(year, month - 1, dueDayOfMonth, 23, 59, 59);
+const computePersonalCycle = (billingStartDate, checkInDate, month, year, graceDays = 5) => {
+  const anchor   = billingStartDate || checkInDate || new Date();
+  const rawDay   = new Date(anchor).getDate();          // 1–31
+  const lastDay  = new Date(year, month, 0).getDate();  // last day of target month
+  const billingDay = Math.min(rawDay, lastDay);
+
+  // cycleStart = billingDay of target month
+  const cycleStart = new Date(year, month - 1, billingDay, 0, 0, 0, 0);
+
+  // cycleEnd = 1 ms before same day next month
+  const nextMonth = month === 12 ? 1  : month + 1;
+  const nextYear  = month === 12 ? year + 1 : year;
+  const lastDayNext    = new Date(nextYear, nextMonth, 0).getDate();
+  const billingDayNext = Math.min(rawDay, lastDayNext);
+  const nextCycleStart = new Date(nextYear, nextMonth - 1, billingDayNext, 0, 0, 0, 0);
+  const cycleEnd = new Date(nextCycleStart.getTime() - 1);  // 1 ms before midnight
+
+  // dueDate = cycleStart + graceDays (end of that day)
+  const dueDate = new Date(cycleStart);
+  dueDate.setDate(dueDate.getDate() + Number(graceDays));
+  dueDate.setHours(23, 59, 59, 999);
+
+  return { cycleStart, cycleEnd, dueDate, billingDay };
+};
 
 /**
  * Get the last ledger balance for a tenant (0 if no entries yet).
@@ -60,9 +94,6 @@ const generateRentForProperty = async (propertyId, month, year) => {
   const created = [];
   const skipped = [];
 
-  const periodStart = new Date(year, month - 1, 1);
-  const periodEnd   = new Date(year, month, 0, 23, 59, 59); // last day of month
-
   for (const tenant of activeTenants) {
     const existing = await RentPayment.findOne({ tenant: tenant._id, month, year });
     if (existing) {
@@ -70,8 +101,28 @@ const generateRentForProperty = async (propertyId, month, year) => {
       continue;
     }
 
-    const dueDate = buildDueDate(tenant.dueDate || 1, month, year);
-    const status  = dueDate < new Date() ? 'overdue' : 'pending';
+    // ── Personal billing cycle ────────────────────────────────────────────────
+    // Each tenant's cycle starts on their check-in day-of-month, every month.
+    // graceDays (tenant.dueDate) is added to cycleStart to compute the due date.
+    const graceDays = tenant.dueDate ?? 5;
+    const { cycleStart, cycleEnd, dueDate, billingDay } = computePersonalCycle(
+      tenant.billingStartDate, tenant.checkInDate, month, year, graceDays
+    );
+
+    // Skip if the billing cycle hasn't started yet (tenant checked in after cycleStart)
+    const billingAnchor = tenant.billingStartDate || tenant.checkInDate;
+    if (billingAnchor && cycleStart < new Date(billingAnchor)) {
+      skipped.push({ tenantId: tenant._id, name: tenant.name, reason: 'Billing cycle not started yet' });
+      continue;
+    }
+
+    // Skip if cycle start is in the future (generate only on/after cycle start)
+    if (cycleStart > new Date()) {
+      skipped.push({ tenantId: tenant._id, name: tenant.name, reason: 'Cycle starts in the future' });
+      continue;
+    }
+
+    const status = dueDate < new Date() ? 'overdue' : 'pending';
 
     // Resolve room from bed (for snapshot)
     let roomId = null;
@@ -88,8 +139,8 @@ const generateRentForProperty = async (propertyId, month, year) => {
       amount:      tenant.rentAmount,
       month,
       year,
-      periodStart,
-      periodEnd,
+      periodStart: cycleStart,
+      periodEnd:   cycleEnd,
       dueDate,
       status,
     });
@@ -104,7 +155,7 @@ const generateRentForProperty = async (propertyId, month, year) => {
       type:          'debit',
       amount:        tenant.rentAmount,
       balanceAfter:  newBalance,
-      referenceType: 'rent_record',
+      referenceType: 'rent_generated',
       referenceId:   record._id,
       description:   `Rent for ${MONTH_SHORT[month - 1]} ${year}`,
     });
@@ -229,7 +280,7 @@ const allocatePayment = async (propertyId, tenantId, opts) => {
     type:          'credit',
     amount,
     balanceAfter:  newBalance,
-    referenceType: 'payment',
+    referenceType: 'payment_received',
     referenceId:   payment._id,
     description,
     method:        method ?? 'cash',

@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "GuestInnFlow",
+    "slug": "guestinnflow-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.guestinnflow.mobile"
+    },
+    "android": {
+      "package": "com.guestinnflow.mobile"
+    },
+    "plugins": []
+  }
+}
