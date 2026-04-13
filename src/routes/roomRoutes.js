@@ -1,6 +1,6 @@
 const express = require('express');
 const { getRooms, getRoom, createRoom, updateRoom, deleteRoom } = require('../controllers/roomController');
-const { getRoomAnalytics, getRoomFinancials } = require('../controllers/bedController');
+const { getRoomAnalytics, getRoomFinancials, getRoomActivity } = require('../controllers/bedController');
 const { protect } = require('../middleware/auth');
 const bedRouter = require('./bedRoutes');
 const validate = require('../middleware/validate');
@@ -21,5 +21,8 @@ router.get('/:id/analytics', getRoomAnalytics);
 
 // GET /api/properties/:propertyId/rooms/:id/financials
 router.get('/:id/financials', getRoomFinancials);
+
+// GET /api/properties/:propertyId/rooms/:id/activity
+router.get('/:id/activity', getRoomActivity);
 
 module.exports = router;

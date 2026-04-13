@@ -6,6 +6,7 @@ const variants = {
   pending:  'bg-amber-100 border-amber-200 text-amber-700',
   notice:   'bg-amber-100 border-amber-200 text-amber-700',
   reserved: 'bg-purple-100 border-purple-200 text-purple-700',
+  lead:     'bg-violet-100 border-violet-200 text-violet-700',
   overdue:  'bg-red-100 border-red-200 text-red-700',
   vacated:  'bg-slate-100 border-slate-200 text-slate-600',
   default:  'bg-slate-100 border-slate-200 text-slate-600',

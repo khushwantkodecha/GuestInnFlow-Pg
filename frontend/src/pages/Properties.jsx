@@ -1,11 +1,10 @@
-import { useState, useMemo, useRef, useCallback } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Plus, Pencil, Trash2, MapPin, Building2, RotateCcw, X,
   AlertTriangle, BedDouble, Users, IndianRupee, ArrowRight,
-  Sparkles, CheckCircle2, Search, SlidersHorizontal,
-  TrendingUp, AlertOctagon, FileText,
+  Sparkles, CheckCircle2, Search,
+  TrendingUp, AlertOctagon, FileText, MoreVertical,
 } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -43,11 +42,6 @@ const cardAccent = (str = '') => {
 }
 
 const TYPE_LABEL = { pg: 'PG', hostel: 'Hostel', apartment: 'Co-living' }
-const TYPE_OPTIONS = [
-  { value: 'pg',        label: 'PG',        desc: 'Paying Guest'    },
-  { value: 'hostel',    label: 'Hostel',     desc: 'Shared dorms'   },
-  { value: 'apartment', label: 'Co-living',  desc: 'Private units'  },
-]
 
 const EMPTY_FORM = {
   name: '', type: 'pg', description: '', isActive: true,
@@ -65,21 +59,12 @@ const formEqual = (a, b) =>
   a.address?.pincode === b.address?.pincode
 
 
-// ── Form section label ────────────────────────────────────────────────────────
-const FormSection = ({ icon: Icon, label, optional }) => (
-  <div className="flex items-center gap-2 mb-3">
-    <div className="h-5 w-5 rounded-md bg-primary-50 flex items-center justify-center shrink-0">
-      <Icon size={11} className="text-primary-500" />
-    </div>
-    <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400 select-none">{label}</span>
-    {optional && <span className="text-[10px] text-slate-300 font-medium ml-1">Optional</span>}
-  </div>
-)
 
 // ── Property Form ─────────────────────────────────────────────────────────────
-const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd, onTitleChange, onDirtyChange }) => {
-  const [form, setForm]     = useState({ isActive: true, ...initial })
-  const [errors, setErrors] = useState({})
+const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd, onTitleChange, onDirtyChange, onDelete }) => {
+  const [form, setForm]         = useState({ isActive: true, type: 'pg', ...initial })
+  const [errors, setErrors]     = useState({})
+  const [notesOpen, setNotesOpen] = useState(!!(initial.description))
 
   const set = (k, v) => {
     const next = { ...form, [k]: v }
@@ -97,119 +82,203 @@ const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd,
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!form.name.trim()) { setErrors({ name: 'Property name is required' }); return }
-    onSubmit(form)
+    const trimmed = form.name.trim()
+    if (!trimmed) { setErrors({ name: 'Property name is required' }); return }
+    onSubmit({ ...form, name: trimmed })
   }
 
+  const canSubmit = form.name.trim().length > 0 && !saving
+
+  // Live preview display values
+  const previewName = form.name.trim() || (isAdd ? 'Your PG Name' : initial.name)
+  const previewCity = form.address?.city?.trim() || form.address?.state?.trim() || 'City, State'
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form onSubmit={handleSubmit} className="-mx-5 -mt-5 flex flex-col">
 
-      {/* ── Property Details ── */}
-      <div>
-        <FormSection icon={Building2} label="Property Details" />
-        <div className="space-y-3">
-
-          {/* Name */}
+      {/* ── Gradient header ── */}
+      <div className="bg-gradient-to-br from-primary-500 to-primary-700 px-5 pt-5 pb-5 rounded-t-2xl">
+        <div className="flex items-start justify-between gap-3 mb-4">
           <div>
-            <label className="label">Property Name <span className="text-red-400">*</span></label>
-            <input
-              autoFocus
-              className={`input ${errors.name ? 'border-red-400 focus:ring-red-400/20 focus:border-red-400' : ''}`}
-              placeholder="e.g. Green Valley PG"
-              value={form.name}
-              onChange={(e) => set('name', e.target.value)}
-            />
-            {errors.name && (
-              <p className="mt-1.5 text-xs text-red-500 flex items-center gap-1">
-                <span className="h-1 w-1 rounded-full bg-red-400 shrink-0" />
-                {errors.name}
-              </p>
-            )}
+            <h2 className="text-[17px] font-bold text-white leading-tight">
+              {isAdd ? 'Add New Property' : 'Edit Property'}
+            </h2>
+            <p className="text-[11px] text-primary-200 mt-0.5">
+              {isAdd ? 'Set up your PG in seconds' : 'Update your property details'}
+            </p>
           </div>
-
-          {/* Type button group */}
-          <div>
-            <label className="label">Property Type</label>
-            <div className="grid grid-cols-3 gap-2">
-              {TYPE_OPTIONS.map(({ value, label, desc }) => {
-                const active = form.type === value
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => set('type', value)}
-                    className={`flex flex-col items-start rounded-xl border px-3 py-2.5 text-left transition-all duration-150
-                      ${active
-                        ? 'border-primary-400 bg-primary-50 ring-2 ring-primary-400/20'
-                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'}`}
-                  >
-                    <span className={`text-[13px] font-semibold leading-tight ${active ? 'text-primary-700' : 'text-slate-700'}`}>
-                      {label}
-                    </span>
-                    <span className={`text-[11px] mt-0.5 ${active ? 'text-primary-500' : 'text-slate-400'}`}>
-                      {desc}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Location ── */}
-      <div>
-        <FormSection icon={MapPin} label="Location" />
-        <div className="space-y-3">
-          <div>
-            <label className="label">Street Address</label>
-            <input className="input" placeholder="e.g. 12 MG Road, Indiranagar"
-              value={form.address.street} onChange={(e) => setAddr('street', e.target.value)} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">City</label>
-              <input className="input" placeholder="e.g. Bangalore"
-                value={form.address.city} onChange={(e) => setAddr('city', e.target.value)} />
-            </div>
-            <div>
-              <label className="label">State</label>
-              <input className="input" placeholder="e.g. Karnataka"
-                value={form.address.state} onChange={(e) => setAddr('state', e.target.value)} />
-            </div>
-          </div>
-          <div className="max-w-[160px]">
-            <label className="label">Pincode</label>
-            <input className="input" placeholder="e.g. 560001" maxLength={6}
-              value={form.address.pincode} onChange={(e) => setAddr('pincode', e.target.value)} />
-          </div>
-        </div>
-      </div>
-
-      {/* ── Description ── */}
-      <div>
-        <FormSection icon={FileText} label="Description" optional />
-        <textarea
-          className="input resize-none"
-          rows={2}
-          placeholder="Add notes about amenities, rules, or anything useful for tenants…"
-          value={form.description}
-          onChange={(e) => set('description', e.target.value)}
-        />
-      </div>
-
-
-      {/* ── Footer ── */}
-      <div className="flex flex-col gap-3 pt-1 border-t border-slate-100">
-        <div className="flex gap-2">
-          <button type="button" className="btn-secondary flex-1" onClick={onCancel}>Cancel</button>
-          <button type="submit" className="btn-primary flex-1" disabled={saving}>
-            {saving ? 'Saving…' : isAdd ? 'Add Property' : 'Save Changes'}
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg p-1.5 text-primary-300 hover:text-white hover:bg-white/15 transition-colors shrink-0"
+            aria-label="Close">
+            <X size={16} />
           </button>
         </div>
-        <p className="text-xs text-slate-400 text-center">
-          {isAdd ? 'Fields marked * are required' : 'Changes are saved immediately'}
-        </p>
+
+        {/* Live preview card */}
+        <div className="rounded-xl bg-white/15 border border-white/20 px-4 py-3 flex items-center gap-3 backdrop-blur-sm">
+          <div className="h-9 w-9 rounded-xl bg-white/20 border border-white/25 flex items-center justify-center shrink-0">
+            <Building2 size={16} className="text-white" />
+          </div>
+          <div className="min-w-0">
+            <p className={`text-sm font-bold leading-tight truncate transition-all ${
+              form.name.trim() ? 'text-white' : 'text-white/40 italic'
+            }`}>
+              {previewName}
+            </p>
+            <p className={`text-[11px] mt-0.5 transition-all ${
+              (form.address?.city || form.address?.state) ? 'text-primary-200' : 'text-white/30 italic'
+            }`}>
+              {previewCity}
+            </p>
+          </div>
+          <span className="shrink-0 ml-auto text-[9px] font-black uppercase tracking-widest text-primary-300 bg-white/15 rounded-full px-2 py-0.5">
+            PG
+          </span>
+        </div>
+      </div>
+
+      {/* ── Form body ── */}
+      <div className="px-5 py-5 space-y-5 overflow-y-auto">
+
+        {/* ── Property Name ── */}
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
+            Property Name <span className="text-red-400 normal-case tracking-normal font-semibold">*</span>
+          </label>
+          <input
+            autoFocus
+            className={`input text-sm font-medium ${
+              errors.name
+                ? 'border-red-400 focus:ring-red-400/20 focus:border-red-400'
+                : form.name.trim()
+                  ? 'border-primary-300 ring-1 ring-primary-200/60'
+                  : ''
+            }`}
+            placeholder="e.g. Green Valley PG"
+            value={form.name}
+            onChange={(e) => set('name', e.target.value)}
+          />
+          {errors.name ? (
+            <p className="text-xs text-red-500 flex items-center gap-1.5">
+              <AlertTriangle size={11} className="shrink-0" />
+              {errors.name}
+            </p>
+          ) : (
+            <p className="text-[10px] text-slate-400">
+              This name will appear across all reports and tenant communications
+            </p>
+          )}
+        </div>
+
+        {/* ── Location ── */}
+        <div className="space-y-3">
+          <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+            <MapPin size={10} className="text-slate-400" /> Location
+          </p>
+          <input
+            className="input text-sm"
+            placeholder="Street address (e.g. 12 MG Road, Indiranagar)"
+            value={form.address?.street ?? ''}
+            onChange={(e) => setAddr('street', e.target.value)}
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              className="input text-sm"
+              placeholder="City"
+              value={form.address?.city ?? ''}
+              onChange={(e) => setAddr('city', e.target.value)}
+            />
+            <input
+              className="input text-sm"
+              placeholder="State"
+              value={form.address?.state ?? ''}
+              onChange={(e) => setAddr('state', e.target.value)}
+            />
+          </div>
+          <input
+            className="input text-sm w-36"
+            placeholder="Pincode"
+            maxLength={6}
+            value={form.address?.pincode ?? ''}
+            onChange={(e) => setAddr('pincode', e.target.value)}
+          />
+        </div>
+
+        {/* ── Notes — collapsible ── */}
+        <div className="rounded-xl border border-slate-200 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setNotesOpen(v => !v)}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 hover:bg-slate-50 transition-colors">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+              <FileText size={13} className="text-slate-400" />
+              Notes
+              {form.description?.trim() && (
+                <span className="w-1.5 h-1.5 rounded-full bg-primary-400 inline-block" />
+              )}
+            </div>
+            <span className="text-[10px] text-slate-400 font-medium">
+              {notesOpen ? 'Hide ▲' : 'Add ▼'}
+            </span>
+          </button>
+          {notesOpen && (
+            <div className="px-3.5 pb-3.5 border-t border-slate-100">
+              <textarea
+                className="input text-sm mt-2.5 resize-none"
+                rows={3}
+                placeholder="Add amenities, house rules, or anything useful for tenants (e.g. AC, WiFi, no alcohol, veg only)…"
+                value={form.description ?? ''}
+                onChange={(e) => set('description', e.target.value)}
+              />
+              <p className="text-[10px] text-slate-400 mt-1.5">Visible to you only — not shown to tenants directly</p>
+            </div>
+          )}
+        </div>
+
+        {/* ── Danger zone (edit mode only) ── */}
+        {!isAdd && onDelete && (
+          <div className="rounded-xl border border-red-100 bg-red-50/50 px-4 py-3.5 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-bold text-red-700">Danger Zone</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">Deactivate this property and hide it from all views</p>
+            </div>
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); onDelete() }}
+              className="shrink-0 flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors">
+              <Trash2 size={12} /> Deactivate
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Footer ── */}
+      <div className="px-5 pb-5 pt-0 flex gap-2.5 border-t border-slate-100">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white
+            bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
+            disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm shadow-primary-200/50 active:scale-[0.98]">
+          {saving ? (
+            <>
+              <span className="h-3.5 w-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+              {isAdd ? 'Creating…' : 'Saving…'}
+            </>
+          ) : (
+            <>
+              {isAdd ? <><Plus size={15} /> Create Property</> : <><CheckCircle2 size={15} /> Save Changes</>}
+            </>
+          )}
+        </button>
       </div>
     </form>
   )
@@ -416,142 +485,168 @@ const QuickSetupModal = ({ propertyName, onSetupRooms, onSkip }) => (
 )
 
 // ── Property Card ─────────────────────────────────────────────────────────────
-const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReactivate, onAnalytics, onHardDelete, onView }) => {
+const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReactivate, onAnalytics, onHardDelete, onView, onManage, onAddRoom }) => {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef   = useRef(null)
   const inactive  = !p.isActive
   const accent    = cardAccent(p._id ?? p.name)
   const s         = stats
   const occupancy = s ? s.occupancyRate : null
+  const isSetupPending = s && s.totalBeds === 0
 
-  const occColor = occupancy === null ? ''
+  const occColor = occupancy === null ? 'text-slate-400'
     : occupancy >= 80 ? 'text-emerald-600' : occupancy >= 50 ? 'text-amber-600' : 'text-slate-500'
-  const occBar = occupancy === null ? ''
+  const occBar = occupancy === null ? 'bg-slate-200'
     : occupancy >= 80 ? 'bg-emerald-500' : occupancy >= 50 ? 'bg-amber-400' : 'bg-primary-500'
+
+  // Status badge
+  const statusBadge = inactive
+    ? { cls: 'bg-red-50 text-red-600 border-red-200', label: 'Inactive' }
+    : isSetupPending
+      ? { cls: 'bg-amber-50 text-amber-700 border-amber-200', label: 'Setup Pending' }
+      : { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: 'Active' }
+
+  // Dynamic alerts
+  const alerts = []
+  if (!inactive && s) {
+    if (s.totalBeds === 0) {
+      alerts.push({ msg: 'Add rooms & beds to start tracking', icon: AlertTriangle })
+    } else if (s.activeTenants === 0) {
+      alerts.push({ msg: 'No active tenants assigned yet', icon: AlertTriangle })
+    }
+  }
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [menuOpen])
 
   return (
     <div
-      onClick={() => onView?.(p)}
-      className={`rounded-2xl overflow-hidden flex flex-col bg-white border transition-all duration-300 cursor-pointer
-      ${inactive
-        ? 'opacity-60 border-slate-200'
-        : `border-slate-200 hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(0,0,0,.08)] hover:border-slate-300`}
-      ${highlight ? 'ring-2 ring-primary-400 ring-offset-2 animate-highlightFade' : ''}`}>
+      className={`relative rounded-2xl overflow-visible flex flex-col bg-white border transition-all duration-300
+        ${inactive
+          ? 'opacity-60 border-slate-200'
+          : 'border-slate-200 hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(0,0,0,.10)] hover:border-slate-300 cursor-default'}
+        ${highlight ? 'ring-2 ring-primary-400 ring-offset-2 animate-highlightFade' : ''}`}>
 
       {/* Accent stripe */}
-      <div className={`h-1 w-full shrink-0 ${inactive ? 'bg-slate-200' : `bg-gradient-to-r ${accent.from} ${accent.to}`}`} />
+      <div className={`h-1 w-full shrink-0 rounded-t-2xl ${inactive ? 'bg-slate-200' : `bg-gradient-to-r ${accent.from} ${accent.to}`}`} />
 
-      {/* Card header */}
-      <div className="flex items-start justify-between gap-3 px-4 pt-4 pb-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl
-            ${inactive ? 'bg-slate-100' : `bg-gradient-to-br ${accent.from} ${accent.to}`}`}>
-            <Building2 size={16} className={inactive ? 'text-slate-400' : 'text-white'} />
-          </div>
-          <div className="min-w-0">
-            <h3 className="font-semibold text-slate-800 truncate text-sm leading-snug">{p.name}</h3>
-            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-              <span className="text-[11px] font-medium text-slate-400">{TYPE_LABEL[p.type] ?? p.type}</span>
-              {(p.address?.city || p.address?.state) && (
-                <>
-                  <span className="text-slate-200 select-none">·</span>
-                  <span className="flex items-center gap-0.5 text-[11px] text-slate-400">
-                    <MapPin size={10} className="shrink-0" />
-                    {[p.address.city, p.address.state].filter(Boolean).join(', ')}
-                  </span>
-                </>
-              )}
-              {inactive && (
-                <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-600 border border-red-200">
-                  Inactive
-                </span>
+      {/* ── HEADER ── */}
+      <div className="px-4 pt-4 pb-3">
+        <div className="flex items-start justify-between gap-2">
+          {/* Icon + name + location */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm
+              ${inactive ? 'bg-slate-100' : `bg-gradient-to-br ${accent.from} ${accent.to}`}`}>
+              <Building2 size={18} className={inactive ? 'text-slate-400' : 'text-white'} />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-bold text-slate-800 truncate text-[15px] leading-tight">{p.name}</h3>
+              {(p.address?.city || p.address?.state) ? (
+                <div className="flex items-center gap-1 mt-0.5 text-[11px] text-slate-400">
+                  <MapPin size={9} className="shrink-0" />
+                  <span className="truncate">{[p.address.city, p.address.state].filter(Boolean).join(', ')}</span>
+                </div>
+              ) : (
+                <p className="mt-0.5 text-[11px] text-slate-400 italic">No address set</p>
               )}
             </div>
           </div>
-        </div>
 
-        {/* Action buttons */}
-        <div className="flex gap-0.5 shrink-0 mt-0.5">
-          {inactive ? (
-            <button onClick={(e) => { e.stopPropagation(); onReactivate(p._id) }}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors" title="Reactivate">
-              <RotateCcw size={14} />
-            </button>
-          ) : (
-            <>
-              <button onClick={(e) => { e.stopPropagation(); onAnalytics(p) }}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors" title="Analytics">
-                <TrendingUp size={14} />
-              </button>
-              <button onClick={(e) => { e.stopPropagation(); onEdit(p) }}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors" title="Edit">
-                <Pencil size={14} />
-              </button>
-              <button onClick={(e) => { e.stopPropagation(); onDelete(p._id) }}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors" title="Deactivate">
-                <Trash2 size={14} />
-              </button>
-            </>
-          )}
+          {/* Status badge */}
+          <span className={`shrink-0 mt-0.5 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold border ${statusBadge.cls}`}>
+            {statusBadge.label}
+          </span>
         </div>
       </div>
 
-      {/* Description */}
-      {p.description && (
-        <p className="px-4 pb-2 -mt-1 text-xs text-slate-400 line-clamp-1">{p.description}</p>
-      )}
+      {/* ── BODY ── */}
+      {!inactive ? (
+        s ? (
+          <div className="flex-1 flex flex-col px-4 pb-3 gap-2.5">
+            <div className="border-t border-slate-100 pt-3 space-y-3">
 
-      {/* Divider */}
-      <div className="mx-4 border-t border-slate-100" />
-
-      {/* Stats */}
-      <div className="flex-1 flex flex-col px-4 py-3 space-y-3">
-        {!inactive ? (
-          s ? (
-            <>
-              {/* Occupancy bar */}
-              <div>
-                <div className="flex items-center justify-between text-xs mb-1.5">
-                  <span className="text-slate-400">Occupancy</span>
-                  <span className={`font-semibold tabular-nums ${occColor}`}>{occupancy}%</span>
-                </div>
-                <div className="h-1.5 w-full rounded-full bg-slate-100">
-                  <div
-                    className={`h-1.5 rounded-full transition-all duration-700 ${occBar}`}
-                    style={{ width: `${occupancy}%` }}
-                  />
-                </div>
+              {/* ── KPI STRIP ── */}
+              <div className="grid grid-cols-4 gap-0 divide-x divide-slate-100 rounded-xl bg-slate-50 border border-slate-200 overflow-hidden">
+                {[
+                  {
+                    label: 'Revenue',
+                    value: `₹${(s.totalRevenue ?? 0).toLocaleString('en-IN')}`,
+                    cls: 'text-slate-800',
+                    small: true,
+                  },
+                  {
+                    label: 'Occupancy',
+                    value: occupancy !== null ? `${occupancy}%` : '—',
+                    cls: occColor,
+                    small: false,
+                  },
+                  {
+                    label: 'Tenants',
+                    value: String(s.activeTenants),
+                    cls: 'text-slate-800',
+                    small: false,
+                  },
+                  {
+                    label: 'Beds',
+                    value: `${s.occupiedBeds}/${s.totalBeds}`,
+                    cls: 'text-slate-800',
+                    small: false,
+                  },
+                ].map(({ label, value, cls, small }) => (
+                  <div key={label} className="flex flex-col items-center text-center py-2.5 px-1">
+                    <p className={`font-bold leading-tight tabular-nums ${small ? 'text-[11px]' : 'text-[13px]'} ${cls}`}>{value}</p>
+                    <p className="text-[9px] font-medium text-slate-400 uppercase tracking-wide mt-0.5">{label}</p>
+                  </div>
+                ))}
               </div>
 
-              {/* Bed stat pills */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-xl px-2.5 py-2 text-center bg-slate-50 border border-slate-100">
-                  <p className="text-sm font-bold text-slate-700">{s.totalBeds}</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Total</p>
+              {/* ── OCCUPANCY BAR (only when beds exist) ── */}
+              {s.totalBeds > 0 && occupancy !== null && (
+                <div>
+                  <div className="flex items-center justify-between text-[10px] mb-1.5">
+                    <span className="text-slate-400 font-medium">Occupancy</span>
+                    <span className={`font-bold tabular-nums ${occColor}`}>{occupancy}%</span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-slate-100">
+                    <div className={`h-1.5 rounded-full transition-all duration-700 ${occBar}`} style={{ width: `${occupancy}%` }} />
+                  </div>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="flex items-center gap-1 text-[9px] text-slate-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block" />
+                      {s.occupiedBeds} occupied
+                    </span>
+                    <span className="flex items-center gap-1 text-[9px] text-slate-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+                      {s.vacantBeds} vacant
+                    </span>
+                  </div>
                 </div>
-                <div className="rounded-xl px-2.5 py-2 text-center bg-emerald-50 border border-emerald-100">
-                  <p className="text-sm font-bold text-emerald-600">{s.vacantBeds}</p>
-                  <p className="text-[10px] text-emerald-500 mt-0.5">Vacant</p>
-                </div>
-                <div className="rounded-xl px-2.5 py-2 text-center bg-blue-50 border border-blue-100">
-                  <p className="text-sm font-bold text-blue-600">{s.occupiedBeds}</p>
-                  <p className="text-[10px] text-blue-500 mt-0.5">Occupied</p>
-                </div>
-              </div>
+              )}
 
-              {/* Footer */}
-              <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
-                <span className="flex items-center gap-1 font-semibold text-slate-700">
-                  <IndianRupee size={11} className="text-primary-500" />{fmt(s.totalRent)}/mo
-                </span>
-                <span className="flex items-center gap-1 text-slate-400">
-                  <Users size={11} />{s.activeTenants} tenant{s.activeTenants !== 1 ? 's' : ''}
-                </span>
-              </div>
-            </>
-          ) : (
-            <StatsSkeleton />
-          )
+              {/* ── ALERTS ── */}
+              {alerts.length > 0 && (
+                <div className="space-y-1.5">
+                  {alerts.map((a, i) => (
+                    <div key={i} className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] font-medium text-amber-700">
+                      <a.icon size={10} className="shrink-0" />
+                      {a.msg}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
-          <div className="flex items-center justify-between py-1">
+          <div className="flex-1 px-4 pb-3"><StatsSkeleton /></div>
+        )
+      ) : (
+        /* Inactive state */
+        <div className="flex-1 px-4 pb-4">
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-4 flex items-center justify-between gap-3">
             <button onClick={(e) => { e.stopPropagation(); onReactivate(p._id) }}
               className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200 transition-colors">
               <RotateCcw size={12} /> Reactivate
@@ -561,121 +656,352 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
               <Trash2 size={12} /> Delete Forever
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* ── FOOTER ACTIONS ── */}
+      {!inactive && (
+        <div className="px-4 pb-4 pt-1 flex items-center gap-2">
+          {/* Primary: Manage Property */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onManage?.(p) }}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-semibold
+              bg-gradient-to-r ${accent.from} ${accent.to} text-white hover:opacity-90 active:scale-[.98] transition-all shadow-sm`}>
+            Manage Property <ArrowRight size={13} />
+          </button>
+
+          {/* Secondary: Add Room */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onAddRoom?.(p) }}
+            className="flex items-center justify-center gap-1 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors whitespace-nowrap shrink-0">
+            <Plus size={12} /> Add Room
+          </button>
+
+          {/* Overflow menu */}
+          <div className="relative shrink-0" ref={menuRef}>
+            <button
+              onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
+              className={`flex items-center justify-center w-9 h-[38px] rounded-xl border transition-colors
+                ${menuOpen ? 'bg-slate-100 border-slate-300 text-slate-700' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}>
+              <MoreVertical size={15} />
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 bottom-full mb-2 w-44 rounded-xl bg-white border border-slate-200 shadow-xl shadow-slate-200/60 overflow-hidden z-20">
+                <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onView?.(p) }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
+                  <Building2 size={13} className="text-slate-400" /> View Details
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onAnalytics(p) }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
+                  <TrendingUp size={13} className="text-slate-400" /> Analytics
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEdit(p) }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
+                  <Pencil size={13} className="text-slate-400" /> Edit Property
+                </button>
+                <div className="border-t border-slate-100 my-0.5" />
+                <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(p._id) }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-red-500 hover:bg-red-50 transition-colors">
+                  <Trash2 size={13} /> Deactivate
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Property Detail Modal ─────────────────────────────────────────────────────
-const PropertyDetailModal = ({ property: p, stats: s, onClose, onEdit, onDelete }) => {
+const PropertyDetailModal = ({
+  property: p, stats: s, onClose, onEdit, onDelete,
+  onAnalytics, onReactivate, onHardDelete, onAddRoom, onAddTenant,
+}) => {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef   = useRef(null)
   const inactive  = !p.isActive
   const accent    = cardAccent(p._id ?? p.name)
   const occupancy = s?.occupancyRate ?? null
-  const occColor  = occupancy === null ? 'text-slate-500'
+  const isEmpty   = s && s.activeTenants === 0
+
+  const occColor = occupancy === null ? 'text-slate-500'
     : occupancy >= 80 ? 'text-emerald-600' : occupancy >= 50 ? 'text-amber-600' : 'text-slate-500'
-  const occBar    = occupancy === null ? 'bg-slate-200'
+  const occBar   = occupancy === null ? 'bg-slate-200'
     : occupancy >= 80 ? 'bg-emerald-500' : occupancy >= 50 ? 'bg-amber-400' : 'bg-primary-500'
 
-  return (
-    <Modal onClose={onClose} size="md" title={p.name}>
-      <div className="space-y-5">
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [menuOpen])
 
-        {/* Hero banner */}
-        <div className={`rounded-2xl bg-gradient-to-br ${accent.from} ${accent.to} p-5 flex items-center gap-4`}>
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-sm">
-            <Building2 size={24} className="text-white" />
+  return (
+    <Modal onClose={onClose} size="md">
+      {/* ── HERO — bleeds to modal edges ── */}
+      <div className={`-mx-5 -mt-5 rounded-t-2xl bg-gradient-to-br ${accent.from} ${accent.to} px-5 pt-5 pb-5 mb-5`}>
+        {/* Top row: icon + name + close */}
+        <div className="flex items-start gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-sm shadow-sm">
+            <Building2 size={22} className="text-white" />
           </div>
-          <div className="min-w-0">
-            <p className="text-white font-bold text-lg leading-tight truncate">{p.name}</p>
-            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-              <span className="text-white/80 text-xs font-medium capitalize">{TYPE_LABEL[p.type] ?? p.type}</span>
-              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold backdrop-blur-sm ${
-                inactive ? 'bg-red-500/30 text-white' : 'bg-white/25 text-white'
-              }`}>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <h2 className="text-white font-bold text-[18px] leading-tight truncate">{p.name}</h2>
+              <button
+                onClick={onClose}
+                className="shrink-0 rounded-lg p-1 text-white/60 hover:text-white hover:bg-white/15 transition-colors"
+                aria-label="Close">
+                <X size={17} />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              <span className="text-white/80 text-xs font-medium">{TYPE_LABEL[p.type] ?? p.type}</span>
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold border
+                ${inactive ? 'bg-red-500/30 border-red-400/30 text-white' : 'bg-white/20 border-white/20 text-white'}`}>
                 {inactive ? 'Inactive' : 'Active'}
               </span>
             </div>
+
             {(p.address?.city || p.address?.state) && (
               <div className="flex items-center gap-1 mt-1.5">
-                <MapPin size={11} className="text-white/60 shrink-0" />
-                <span className="text-white/70 text-xs">{[p.address.city, p.address.state].filter(Boolean).join(', ')}</span>
+                <MapPin size={10} className="text-white/50 shrink-0" />
+                <span className="text-white/70 text-xs">
+                  {[p.address.city, p.address.state].filter(Boolean).join(', ')}
+                </span>
               </div>
             )}
           </div>
         </div>
 
-        {/* Address */}
-        {p.address?.street && (
-          <div className="flex items-start gap-2.5 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3">
-            <MapPin size={14} className="text-primary-500 mt-0.5 shrink-0" />
-            <p className="text-sm text-slate-600 leading-relaxed">
-              {[p.address.street, p.address.city, p.address.state, p.address.pincode].filter(Boolean).join(', ')}
-            </p>
+        {/* Quick-stat pills */}
+        {s && (
+          <div className="flex items-center gap-2 mt-4 flex-wrap">
+            <div className="flex items-center gap-1.5 rounded-lg bg-white/15 border border-white/10 px-2.5 py-1.5">
+              <BedDouble size={11} className="text-white/70" />
+              <span className="text-white text-[11px] font-semibold">
+                {s.occupiedBeds}/{s.totalBeds} beds
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 rounded-lg bg-white/15 border border-white/10 px-2.5 py-1.5">
+              <Users size={11} className="text-white/70" />
+              <span className="text-white text-[11px] font-semibold">
+                {s.activeTenants} tenant{s.activeTenants !== 1 ? 's' : ''}
+              </span>
+            </div>
+            {occupancy !== null && (
+              <div className="flex items-center gap-1.5 rounded-lg bg-white/15 border border-white/10 px-2.5 py-1.5">
+                <TrendingUp size={11} className="text-white/70" />
+                <span className="text-white text-[11px] font-semibold">{occupancy}% full</span>
+              </div>
+            )}
           </div>
         )}
+      </div>
+
+      {/* ── BODY ── */}
+      <div className="space-y-4">
 
         {/* Description */}
         {p.description && (
-          <p className="text-sm text-slate-500 leading-relaxed px-1">{p.description}</p>
+          <p className="text-sm text-slate-500 leading-relaxed">{p.description}</p>
         )}
 
-        {/* Stats */}
-        {s && (
-          <div className="space-y-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Overview</p>
-            <div className="grid grid-cols-4 gap-2">
-              {[
-                { label: 'Total Beds', value: s.totalBeds,     bg: 'bg-slate-50',    border: 'border-slate-200',   val: 'text-slate-700' },
-                { label: 'Vacant',     value: s.vacantBeds,    bg: 'bg-emerald-50',  border: 'border-emerald-200', val: 'text-emerald-600' },
-                { label: 'Occupied',   value: s.occupiedBeds,  bg: 'bg-blue-50',     border: 'border-blue-200',    val: 'text-blue-600' },
-                { label: 'Tenants',    value: s.activeTenants, bg: 'bg-violet-50',   border: 'border-violet-200',  val: 'text-violet-600' },
-              ].map(({ label, value, bg, border, val }) => (
-                <div key={label} className={`rounded-xl px-2 py-3 text-center ${bg} border ${border}`}>
-                  <p className={`text-xl font-bold ${val}`}>{value}</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5 leading-tight">{label}</p>
-                </div>
-              ))}
+        {/* Address */}
+        {(p.address?.street || p.address?.city) && (
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Address</p>
+            <div className="flex items-start gap-2.5 rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-3">
+              <MapPin size={14} className="text-primary-500 mt-0.5 shrink-0" />
+              <p className="text-sm text-slate-600 leading-relaxed">
+                {[p.address.street, p.address.city, p.address.state, p.address.pincode].filter(Boolean).join(', ')}
+              </p>
             </div>
+          </div>
+        )}
 
-            {/* Rent + Occupancy */}
-            <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3.5 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Monthly Rent</p>
-                <p className="text-xl font-bold text-slate-800 mt-0.5">₹{fmt(s.totalRent)}</p>
-              </div>
-              {occupancy !== null && (
-                <div className="text-right">
-                  <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide mb-1.5">Occupancy</p>
-                  <div className="flex items-center gap-2">
-                    <div className="w-24 h-1.5 rounded-full bg-slate-200">
-                      <div className={`h-1.5 rounded-full ${occBar}`} style={{ width: `${occupancy}%` }} />
+        {/* Stats sections */}
+        {s ? (
+          <>
+            {/* ── INSIGHT GRID — 2×2 ── */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Overview</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    label: 'Total Beds', value: s.totalBeds,
+                    icon: BedDouble, iconCls: 'text-slate-500',
+                    iconBg: 'bg-slate-200/70', bg: 'bg-slate-50', border: 'border-slate-200', val: 'text-slate-700',
+                  },
+                  {
+                    label: 'Tenants', value: s.activeTenants,
+                    icon: Users, iconCls: 'text-violet-500',
+                    iconBg: 'bg-violet-200/60', bg: 'bg-violet-50', border: 'border-violet-200', val: 'text-violet-700',
+                  },
+                  {
+                    label: 'Vacant', value: s.vacantBeds,
+                    icon: CheckCircle2, iconCls: 'text-emerald-500',
+                    iconBg: 'bg-emerald-200/60', bg: 'bg-emerald-50', border: 'border-emerald-200', val: 'text-emerald-600',
+                  },
+                  {
+                    label: 'Occupied', value: s.occupiedBeds,
+                    icon: Users, iconCls: 'text-blue-500',
+                    iconBg: 'bg-blue-200/60', bg: 'bg-blue-50', border: 'border-blue-200', val: 'text-blue-600',
+                  },
+                ].map(({ label, value, icon: Icon, iconCls, iconBg, bg, border, val }) => (
+                  <div key={label} className={`flex items-center gap-3 rounded-xl ${bg} border ${border} px-3.5 py-3`}>
+                    <div className={`h-8 w-8 rounded-lg ${iconBg} flex items-center justify-center shrink-0`}>
+                      <Icon size={15} className={iconCls} />
                     </div>
-                    <span className={`text-sm font-bold ${occColor}`}>{occupancy}%</span>
+                    <div>
+                      <p className={`text-xl font-bold leading-none ${val}`}>{value}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">{label}</p>
+                    </div>
                   </div>
-                </div>
-              )}
+                ))}
+              </div>
             </div>
-          </div>
+
+            {/* ── REVENUE SECTION ── */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Revenue</p>
+              <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-4 space-y-3">
+                {/* Revenue + Occupancy % */}
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide mb-0.5">Monthly Revenue</p>
+                    <p className="flex items-baseline gap-0.5 text-[22px] font-bold text-slate-800 leading-none">
+                      <IndianRupee size={15} className="text-primary-500 mb-px" />
+                      {(s.totalRevenue ?? 0).toLocaleString('en-IN')}
+                    </p>
+                    {s.extraRevenue > 0 && (
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        ₹{(s.normalRevenue ?? 0).toLocaleString('en-IN')} base · ₹{(s.extraRevenue ?? 0).toLocaleString('en-IN')} extra
+                      </p>
+                    )}
+                  </div>
+                  {occupancy !== null && (
+                    <div className="text-right">
+                      <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide mb-0.5">Occupancy</p>
+                      <p className={`text-[22px] font-bold leading-none ${occColor}`}>{occupancy}%</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Occupancy bar */}
+                {occupancy !== null && (
+                  <>
+                    <div className="h-2 w-full rounded-full bg-slate-200">
+                      <div className={`h-2 rounded-full transition-all duration-700 ${occBar}`} style={{ width: `${occupancy}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block" />
+                        {s.occupiedBeds} occupied
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+                        {s.vacantBeds} vacant
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* ── EMPTY STATE ── */}
+            {isEmpty && (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 px-5 py-5 flex flex-col items-center gap-3 text-center">
+                <div className="h-11 w-11 rounded-xl bg-slate-100 flex items-center justify-center shadow-sm">
+                  <BedDouble size={20} className="text-slate-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-600">No tenants yet</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                    Set up rooms and assign beds to start tracking revenue
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {onAddRoom && (
+                    <button
+                      onClick={() => { onClose(); onAddRoom() }}
+                      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-primary-50 text-primary-600 hover:bg-primary-100 border border-primary-200 transition-colors">
+                      <Plus size={12} /> Add Room
+                    </button>
+                  )}
+                  {onAddTenant && (
+                    <button
+                      onClick={() => { onClose(); onAddTenant() }}
+                      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200 transition-colors">
+                      <Users size={12} /> Add Tenant
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          !inactive && <StatsSkeleton />
         )}
 
-        {/* Actions */}
-        {!inactive && (
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={() => { onClose(); onEdit(p) }}
-              className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-primary-500 hover:bg-primary-600 py-2.5 text-sm font-semibold text-white transition-colors"
-            >
-              <Pencil size={14} /> Edit Property
-            </button>
-            <button
-              onClick={() => { onClose(); onDelete(p._id) }}
-              className="flex items-center justify-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-100 transition-colors"
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
-        )}
+        {/* ── ACTIONS ── */}
+        <div className="pt-1 border-t border-slate-100">
+          {!inactive ? (
+            <div className="flex gap-2">
+              {/* Primary: Edit Property */}
+              <button
+                onClick={() => { onClose(); onEdit(p) }}
+                className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold text-white transition-all shadow-sm
+                  bg-gradient-to-r ${accent.from} ${accent.to} hover:opacity-90 active:scale-[.98]`}>
+                <Pencil size={14} /> Edit Property
+              </button>
+
+              {/* Secondary dropdown */}
+              <div className="relative" ref={menuRef}>
+                <button
+                  onClick={() => setMenuOpen(v => !v)}
+                  className={`flex items-center justify-center w-10 h-[42px] rounded-xl border transition-colors
+                    ${menuOpen ? 'bg-slate-100 border-slate-300 text-slate-700' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}>
+                  <MoreVertical size={15} />
+                </button>
+                {menuOpen && (
+                  <div className="absolute right-0 bottom-full mb-2 w-48 rounded-xl bg-white border border-slate-200 shadow-xl shadow-slate-200/60 overflow-hidden z-20">
+                    {onAnalytics && (
+                      <button
+                        onClick={() => { setMenuOpen(false); onClose(); onAnalytics(p) }}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
+                        <TrendingUp size={13} className="text-slate-400" /> Analytics
+                      </button>
+                    )}
+                    <div className="border-t border-slate-100 my-0.5" />
+                    <button
+                      onClick={() => { setMenuOpen(false); onClose(); onDelete(p._id) }}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-red-500 hover:bg-red-50 transition-colors">
+                      <Trash2 size={13} /> Deactivate Property
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Inactive actions */
+            <div className="flex gap-2">
+              <button
+                onClick={() => { onClose(); onReactivate?.(p._id) }}
+                className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-medium bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200 transition-colors">
+                <RotateCcw size={14} /> Reactivate
+              </button>
+              <button
+                onClick={() => { onClose(); onHardDelete?.(p) }}
+                className="flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors">
+                <Trash2 size={14} /> Delete Forever
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </Modal>
   )
@@ -700,7 +1026,6 @@ const Properties = () => {
   const [saving,       setSaving]       = useState(false)
   const [confirming,   setConfirming]   = useState(false)
 
-  const [liveTitle,    setLiveTitle]    = useState('')
   const [formDirty,    setFormDirty]    = useState(false)
   const [discardGuard, setDiscardGuard] = useState(false)
   const [updatedId,    setUpdatedId]    = useState(null)
@@ -709,40 +1034,48 @@ const Properties = () => {
   const [viewProperty, setViewProperty] = useState(null)
 
   const [search,       setSearch]       = useState('')
-  const [filterType,   setFilterType]   = useState('all')
   const [filterStatus, setFilterStatus] = useState('active')
-  const [showFilters,  setShowFilters]  = useState(false)
 
   const properties    = data?.data ?? []
   const activeCount   = properties.filter((p) => p.isActive).length
   const inactiveCount = properties.filter((p) => !p.isActive).length
 
+  // Portfolio-level aggregates (active properties only)
+  const activeStats = properties.filter((p) => p.isActive).map((p) => statsMap[p._id]).filter(Boolean)
+  const portfolioRevenue  = activeStats.reduce((s, x) => s + (x.totalRevenue  ?? 0), 0)
+  const portfolioTenants  = activeStats.reduce((s, x) => s + (x.activeTenants ?? 0), 0)
+  const portfolioTotalBeds = activeStats.reduce((s, x) => s + (x.totalBeds    ?? 0), 0)
+  const portfolioOccupied = activeStats.reduce((s, x) => s + (x.occupiedBeds  ?? 0), 0)
+  const portfolioOccPct   = portfolioTotalBeds > 0
+    ? Math.round((portfolioOccupied / portfolioTotalBeds) * 100)
+    : 0
+
   const filtered = useMemo(() => {
     return properties.filter((p) => {
       const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase()) ||
         (p.address?.city ?? '').toLowerCase().includes(search.toLowerCase())
-      const matchType   = filterType === 'all'   || p.type === filterType
       const matchStatus = filterStatus === 'all' || (filterStatus === 'active' ? p.isActive : !p.isActive)
-      return matchSearch && matchType && matchStatus
+      return matchSearch && matchStatus
     })
-  }, [properties, search, filterType, filterStatus])
+  }, [properties, search, filterStatus])
 
   const closeModal = useCallback(() => {
     if (modal !== 'add' && formDirty) {
       setDiscardGuard(true)
     } else {
-      setModal(null); setLiveTitle(''); setFormDirty(false)
+      setModal(null); setFormDirty(false)
     }
   }, [modal, formDirty])
 
   const confirmDiscard = useCallback(() => {
-    setDiscardGuard(false); setModal(null); setLiveTitle(''); setFormDirty(false)
+    setDiscardGuard(false); setModal(null); setFormDirty(false)
+
   }, [])
 
   const handleSave = async (form) => {
     if (modal !== 'add' && formEqual(form, modal)) {
       toast('No changes made', 'info')
-      setModal(null); setLiveTitle(''); setFormDirty(false)
+      setModal(null); setFormDirty(false)
       return
     }
     setSaving(true)
@@ -750,13 +1083,13 @@ const Properties = () => {
       if (modal === 'add') {
         const res = await createProperty(form)
         const newProperty = res.data?.data
-        setModal(null); setLiveTitle(''); setFormDirty(false)
+        setModal(null); setFormDirty(false)
         setQuickSetup(newProperty ?? form.name)
         toast(`"${form.name}" created successfully`, 'success')
       } else {
         const savedId = modal._id
         await updateProperty(savedId, form)
-        setModal(null); setLiveTitle(''); setFormDirty(false)
+        setModal(null); setFormDirty(false)
         toast(`"${form.name}" updated`, 'success')
         clearTimeout(highlightTimer.current)
         setUpdatedId(savedId)
@@ -811,153 +1144,81 @@ const Properties = () => {
   return (
     <div className="space-y-5 max-w-6xl">
 
-      {/* ── Toolbar ── */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-sm text-slate-500">
-          {activeCount} active propert{activeCount !== 1 ? 'ies' : 'y'}
-          {inactiveCount > 0 && <span className="ml-2 text-slate-400">· {inactiveCount} inactive</span>}
-        </p>
-        <button className="btn-primary" onClick={() => setModal('add')}>
+      {/* ── Page Header ── */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-xl font-bold text-slate-800 leading-tight">My Properties</h1>
+          <p className="text-sm text-slate-400 mt-0.5">
+            {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ''}
+          </p>
+        </div>
+        <button className="btn-primary shrink-0" onClick={() => setModal('add')}>
           <Plus size={16} /> Add Property
         </button>
       </div>
 
+      {/* ── Portfolio KPI Bar ── */}
+      {!loading && activeCount > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Total Revenue', value: fmt(portfolioRevenue), sub: '/mo', icon: IndianRupee, accent: 'text-primary-600', bg: 'bg-primary-50 border-primary-100' },
+            { label: 'Occupancy', value: `${portfolioOccPct}%`, icon: TrendingUp, accent: portfolioOccPct >= 80 ? 'text-emerald-600' : portfolioOccPct >= 50 ? 'text-amber-600' : 'text-slate-500', bg: 'bg-slate-50 border-slate-200' },
+            { label: 'Active Tenants', value: portfolioTenants, icon: Users, accent: 'text-violet-600', bg: 'bg-violet-50 border-violet-100' },
+            { label: 'Beds Occupied', value: `${portfolioOccupied}/${portfolioTotalBeds}`, icon: BedDouble, accent: 'text-blue-600', bg: 'bg-blue-50 border-blue-100' },
+          ].map(({ label, value, sub, icon: Icon, accent, bg }) => (
+            <div key={label} className="rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm">
+              <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${bg}`}>
+                <Icon size={15} className={accent} />
+              </div>
+              <div className="min-w-0">
+                <p className={`text-[18px] font-bold leading-none tabular-nums ${accent}`}>
+                  {value}
+                  {sub && <span className="text-[11px] font-normal text-slate-400 ml-0.5">{sub}</span>}
+                </p>
+                <p className="text-[10px] text-slate-400 mt-0.5 font-medium">{label}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── Search + Filters ── */}
       {!loading && properties.length > 0 && (
-        <div className="space-y-2">
-          {/* Row: search + mobile filter toggle */}
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1 min-w-0">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                className="input pl-8 py-1.5 text-sm w-full"
-                placeholder="Search by name or city…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            {/* Mobile filter toggle */}
-            <button
-              onClick={() => setShowFilters((v) => !v)}
-              className={`sm:hidden relative flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors shrink-0 ${
-                showFilters
-                  ? 'border-primary-300 bg-primary-50 text-primary-600'
-                  : 'border-slate-200 bg-white text-slate-500'
-              }`}
-            >
-              <SlidersHorizontal size={13} />
-              Filters
-              {(filterType !== 'all' || filterStatus !== 'active') && (
-                <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-primary-500 ring-2 ring-white" />
-              )}
-            </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Search */}
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              className="input pl-8 py-1.5 text-sm w-full"
+              placeholder="Search by name or city…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
 
-          {/* Mobile filter bottom sheet */}
-          {showFilters && createPortal(
-            <div className="fixed inset-0 z-50 flex items-end"
-              style={{ background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(2px)' }}
-              onClick={() => setShowFilters(false)}>
-              <div className="w-full bg-white rounded-t-2xl overflow-y-auto max-h-[80vh]"
-                onClick={e => e.stopPropagation()}>
-                {/* Header */}
-                <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <SlidersHorizontal size={15} className="text-primary-500" />
-                    <span className="text-sm font-semibold text-slate-800">Filters</span>
-                  </div>
-                  <button onClick={() => setShowFilters(false)}
-                    className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 transition-colors">
-                    <X size={16} />
-                  </button>
-                </div>
-
-                <div className="p-4 space-y-4">
-                  {/* Type */}
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Type</p>
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {['all', 'pg', 'hostel', 'apartment'].map((t) => (
-                        <button key={t} onClick={() => setFilterType(t)}
-                          className={`rounded-xl py-2 text-xs font-medium capitalize border text-center transition-colors ${
-                            filterType === t ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                          }`}>
-                          {t === 'all' ? 'All' : TYPE_LABEL[t]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Status */}
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Status</p>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {[['active', 'Active'], ['inactive', 'Inactive'], ['all', 'All']].map(([v, l]) => (
-                        <button key={v} onClick={() => setFilterStatus(v)}
-                          className={`rounded-xl py-2 text-xs font-medium border text-center transition-colors ${
-                            filterStatus === v ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                          }`}>
-                          {l}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex gap-2 pt-1 pb-2">
-                    {(filterType !== 'all' || filterStatus !== 'active') && (
-                      <button
-                        onClick={() => { setFilterType('all'); setFilterStatus('active') }}
-                        className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-500 hover:bg-slate-50 transition-colors">
-                        Reset
-                      </button>
-                    )}
-                    <button onClick={() => setShowFilters(false)}
-                      className="flex-1 rounded-xl bg-primary-500 hover:bg-primary-600 py-2.5 text-sm font-semibold text-white transition-colors">
-                      Apply
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>,
-            document.body
-          )}
-
-          {/* Desktop filters row */}
-          <div className="hidden sm:flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-0.5 rounded-xl p-1 text-xs bg-slate-50 border border-slate-200">
-              {['all', 'pg', 'hostel', 'apartment'].map((t) => (
-                <button key={t} onClick={() => setFilterType(t)}
-                  className={`rounded-lg px-2.5 py-1.5 font-medium capitalize transition-colors ${
-                    filterType === t
-                      ? 'bg-white text-primary-600 shadow-sm border border-slate-200'
-                      : 'text-slate-500 hover:bg-white hover:text-slate-700'
-                  }`}>
-                  {t === 'all' ? 'All Types' : TYPE_LABEL[t]}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-0.5 rounded-xl p-1 text-xs bg-slate-50 border border-slate-200">
-              {[['active', 'Active'], ['inactive', 'Inactive'], ['all', 'All']].map(([v, l]) => (
-                <button key={v} onClick={() => setFilterStatus(v)}
-                  className={`rounded-lg px-2.5 py-1.5 font-medium transition-colors ${
-                    filterStatus === v
-                      ? 'bg-white text-primary-600 shadow-sm border border-slate-200'
-                      : 'text-slate-500 hover:bg-white hover:text-slate-700'
-                  }`}>
-                  {l}
-                </button>
-              ))}
-            </div>
-            {(search || filterType !== 'all' || filterStatus !== 'active') && (
-              <button
-                onClick={() => { setSearch(''); setFilterType('all'); setFilterStatus('active') }}
-                className="text-xs text-primary-600 hover:text-primary-700 hover:underline font-medium"
-              >
-                Clear filters
+          {/* Status filter */}
+          <div className="flex items-center gap-0.5 rounded-xl p-1 text-xs bg-slate-50 border border-slate-200 shrink-0">
+            {[['active', 'Active'], ['inactive', 'Inactive'], ['all', 'All']].map(([v, l]) => (
+              <button key={v} onClick={() => setFilterStatus(v)}
+                className={`rounded-lg px-2.5 py-1.5 font-medium transition-colors ${
+                  filterStatus === v
+                    ? 'bg-white text-primary-600 shadow-sm border border-slate-200'
+                    : 'text-slate-500 hover:bg-white hover:text-slate-700'
+                }`}>
+                {l}
               </button>
-            )}
+            ))}
           </div>
+
+          {/* Clear */}
+          {(search || filterStatus !== 'active') && (
+            <button
+              onClick={() => { setSearch(''); setFilterStatus('active') }}
+              className="text-xs text-primary-600 hover:text-primary-700 hover:underline font-medium shrink-0"
+            >
+              Clear
+            </button>
+          )}
         </div>
       )}
 
@@ -985,11 +1246,14 @@ const Properties = () => {
         </div>
       ) : filtered.length === 0 ? (
         <div className="card py-10 text-center">
-          <SlidersHorizontal size={24} className="mx-auto text-slate-300 mb-3" />
-          <p className="text-sm text-slate-500 font-medium">No properties match your filters</p>
-          <button onClick={() => { setSearch(''); setFilterType('all'); setFilterStatus('active') }}
-            className="mt-2 text-xs text-primary-600 hover:underline">
-            Clear all filters
+          <Search size={24} className="mx-auto text-slate-300 mb-3" />
+          <p className="text-sm text-slate-600 font-semibold">No properties found</p>
+          <p className="text-xs text-slate-400 mt-1">Try a different name, city, or adjust your filters</p>
+          <button
+            onClick={() => { setSearch(''); setFilterStatus('active') }}
+            className="mt-3 text-xs text-primary-600 hover:underline font-medium"
+          >
+            Clear filters
           </button>
         </div>
       ) : (
@@ -1001,11 +1265,13 @@ const Properties = () => {
               stats={statsMap[p._id]}
               highlight={updatedId === p._id}
               onView={setViewProperty}
-              onEdit={(prop) => { setLiveTitle(prop.name); setFormDirty(false); setModal(prop) }}
+              onEdit={(prop) => { setFormDirty(false); setModal(prop) }}
               onDelete={handleDelete}
               onReactivate={handleReactivate}
               onAnalytics={setAnalytics}
               onHardDelete={setHardDelete}
+              onManage={(prop) => { setSelectedProperty(prop); navigate('/rooms') }}
+              onAddRoom={(prop) => { setSelectedProperty(prop); navigate('/rooms') }}
             />
           ))}
         </div>
@@ -1017,25 +1283,27 @@ const Properties = () => {
           property={viewProperty}
           stats={statsMap[viewProperty._id]}
           onClose={() => setViewProperty(null)}
-          onEdit={(prop) => { setLiveTitle(prop.name); setFormDirty(false); setModal(prop) }}
+          onEdit={(prop) => { setFormDirty(false); setModal(prop) }}
           onDelete={handleDelete}
+          onAnalytics={setAnalytics}
+          onReactivate={handleReactivate}
+          onHardDelete={setHardDelete}
+          onAddRoom={() => { setSelectedProperty(viewProperty); navigate('/rooms') }}
+          onAddTenant={() => navigate('/tenants')}
         />
       )}
 
       {/* ── Modals ── */}
       {modal && (
-        <Modal
-          title={modal === 'add' ? 'Add Property' : `Edit — ${liveTitle || modal.name || 'Property'}`}
-          onClose={closeModal}
-        >
+        <Modal onClose={closeModal}>
           <PropertyForm
             initial={modal === 'add' ? EMPTY_FORM : modal}
             onSubmit={handleSave}
             saving={saving}
             onCancel={closeModal}
             isAdd={modal === 'add'}
-            onTitleChange={setLiveTitle}
             onDirtyChange={setFormDirty}
+            onDelete={modal !== 'add' ? () => { closeModal(); handleDelete(modal._id) } : undefined}
           />
         </Modal>
       )}

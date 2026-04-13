@@ -22,6 +22,8 @@ const Expenses    = lazy(() => import('./pages/Expenses'))
 const Accounting  = lazy(() => import('./pages/Accounting'))
 const Reports    = lazy(() => import('./pages/Reports'))
 const Settings   = lazy(() => import('./pages/Settings'))
+const Invoices   = lazy(() => import('./pages/Invoices'))
+const Reminders  = lazy(() => import('./pages/Reminders'))
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth()
@@ -49,6 +51,8 @@ const AppRoutes = () => (
       <Route path="/rent"        element={<Suspense fallback={<Spinner />}><Rent /></Suspense>} />
       <Route path="/expenses"    element={<Suspense fallback={<Spinner />}><Expenses /></Suspense>} />
       <Route path="/accounting" element={<Suspense fallback={<Spinner />}><Accounting /></Suspense>} />
+      <Route path="/invoices"   element={<Suspense fallback={<Spinner />}><Invoices /></Suspense>} />
+      <Route path="/reminders"  element={<Suspense fallback={<Spinner />}><Reminders /></Suspense>} />
       <Route path="/reports"     element={<Suspense fallback={<Spinner />}><Reports /></Suspense>} />
       <Route path="/settings"    element={<Suspense fallback={<Spinner />}><Settings /></Suspense>} />
     </Route>

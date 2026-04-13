@@ -42,10 +42,19 @@ const bedSchema = new mongoose.Schema(
       default: null,
     },
     reservation: {
-      name:       { type: String, trim: true, default: null },
-      phone:      { type: String, trim: true, default: null },
-      moveInDate: { type: Date, default: null },
-      notes:      { type: String, trim: true, default: null },
+      tenantId:          { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', default: null },
+      name:              { type: String, trim: true, default: null },
+      phone:             { type: String, trim: true, default: null },
+      moveInDate:        { type: Date, default: null },
+      notes:             { type: String, trim: true, default: null },
+      source:            { type: String, enum: ['lead', 'existing_tenant'], default: 'lead' },
+      // ── Advance (token) amount ─────────────────────────────────────────────
+      reservationAmount: { type: Number, min: 0, default: 0 },
+      reservationMode:   { type: String, enum: ['adjust', 'refund', null], default: null },
+      // held → advance collected, awaiting assignment/cancellation
+      // converted → applied to first rent on assignment (adjust mode)
+      // cancelled → reservation cancelled, advance marked for refund
+      reservationStatus: { type: String, enum: ['held', 'converted', 'cancelled', null], default: null },
     },
     blockReason: {
       type: String,

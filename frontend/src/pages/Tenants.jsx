@@ -1,13 +1,18 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
   Plus, Phone, Mail, BedDouble, Calendar, Calculator,
   UserX, IndianRupee, User, Hash,
   FileText, ShieldCheck, Upload, Link,
   Search, X, RotateCcw, Eye, MessageCircle,
-  Check, CheckCircle, AlertCircle, Download, Clock,
+  Check, CheckCircle, AlertCircle, Download, Clock, Bell,
+  BookOpen, ChevronDown, ChevronUp, Filter, CreditCard, Zap,
+  TrendingUp, TrendingDown, Minus, RefreshCw, ChevronLeft, ChevronRight,
 } from 'lucide-react'
-import { getTenants, getTenant, createTenant, vacateTenant, markDepositPaid, getTenantRents } from '../api/tenants'
+import { getTenants, getTenant, searchTenants as searchTenantsApi, createTenant, vacateTenant, markDepositPaid, getTenantRents, getTenantAdvance, applyTenantAdvance, refundTenantAdvance, adjustDeposit, refundDeposit } from '../api/tenants'
+import { getTenantLedger, recordPayment, addCharge } from '../api/rent'
+import { getInvoices, getInvoicePdfUrl } from '../api/invoices'
+import { getReminderLogs } from '../api/reminders'
 import { getRooms, getBeds } from '../api/rooms'
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
@@ -238,6 +243,11 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
   const [form, setForm] = useState(EMPTY_FORM)
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
+  // Duplicate phone detection
+  const [phoneConflict, setPhoneConflict]   = useState(null)
+  const [phoneChecking, setPhoneChecking]   = useState(false)
+  const phoneDebounceRef                    = useRef(null)
+
   // Fetch rooms for bed assignment
   const { data: roomData } = useApi(() => getRooms(propertyId), [propertyId])
   const rooms = roomData?.data ?? []
@@ -254,8 +264,27 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
       .finally(() => setBedsLoading(false))
   }, [form.selectedRoomId]) // eslint-disable-line
 
+  const handlePhoneChange = (val) => {
+    set('phone', val)
+    setPhoneConflict(null)
+    clearTimeout(phoneDebounceRef.current)
+    const digits = val.replace(/\D/g, '')
+    if (digits.length < 6) return
+    setPhoneChecking(true)
+    phoneDebounceRef.current = setTimeout(() => {
+      searchTenantsApi(propertyId, { phone: val.trim() })
+        .then(r => {
+          const active = (r.data?.data ?? []).find(t => t.status === 'active' || t.status === 'notice' || t.status === 'lead')
+          setPhoneConflict(active ?? null)
+        })
+        .catch(() => {})
+        .finally(() => setPhoneChecking(false))
+    }, 500)
+  }
+
   const handleSubmit = (e) => {
     e.preventDefault()
+    if (phoneConflict) return
     const { selectedRoomId, ...rest } = form
     onSubmit({
       ...rest,
@@ -277,11 +306,32 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
             <input className="input" placeholder="Rahul Sharma" value={form.name}
               onChange={(e) => set('name', e.target.value)} required />
           </div>
-          <div>
+          <div className="col-span-2">
             <label className="label">Phone *</label>
-            <PhoneInput value={form.phone} onChange={(v) => set('phone', v)} />
+            <div className="relative">
+              <PhoneInput value={form.phone} onChange={handlePhoneChange} />
+              {phoneChecking && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 animate-pulse pointer-events-none">
+                  checking…
+                </span>
+              )}
+            </div>
+            {phoneConflict && (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 flex items-start gap-2">
+                <AlertCircle size={13} className="text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-bold text-amber-700">Tenant already exists</p>
+                  <p className="text-[11px] text-amber-600 mt-0.5">
+                    <span className="font-semibold">{phoneConflict.name}</span> · {phoneConflict.phone} · {phoneConflict.status}
+                  </p>
+                  <p className="text-[11px] text-amber-600 mt-0.5">
+                    Use the Assign Bed flow from the Rooms & Beds page to re-assign this tenant.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
-          <div>
+          <div className="col-span-2">
             <label className="label">Email</label>
             <input type="email" className="input" placeholder="rahul@example.com" value={form.email}
               onChange={(e) => set('email', e.target.value)} />
@@ -355,7 +405,7 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
 
       <div className="flex gap-2 pt-1 border-t border-slate-100">
         <button type="button" className="btn-secondary flex-1" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="btn-primary flex-1" disabled={saving}>
+        <button type="submit" className="btn-primary flex-1" disabled={saving || !!phoneConflict || phoneChecking}>
           {saving ? 'Adding…' : 'Add Tenant'}
         </button>
       </div>
@@ -467,6 +517,24 @@ const TenantRow = ({ tenant: t, selected, onSelect, onView, onVacate }) => {
   )
 }
 
+// ── Rent history helpers ──────────────────────────────────────────────────────
+const SOURCE_LABELS = {
+  per_bed:        'Fixed per bed',
+  per_room_split: 'Split by occupancy',
+  override:       'Manual override',
+  extra_custom:   'Extra bed custom',
+  extra_fallback: 'Extra bed default',
+  extra_free:     'Free (non-chargeable)',
+}
+const REASON_LABELS = {
+  assign:           'Tenant assigned',
+  vacate:           'Tenant vacated',
+  change_room:      'Room changed',
+  extra_bed_change: 'Extra bed changed',
+  base_rent_update: 'Base rent updated',
+  rent_type_update: 'Rent type changed',
+}
+
 // ── Tenant Profile Drawer ─────────────────────────────────────────────────────
 const InfoRow = ({ icon: Icon, label, value }) => (
   <div className="flex items-start gap-3 py-3 border-b border-slate-100 last:border-0">
@@ -480,10 +548,115 @@ const InfoRow = ({ icon: Icon, label, value }) => (
   </div>
 )
 
+// ── Ledger helpers ────────────────────────────────────────────────────────────
+const LEDGER_BADGE = {
+  rent_record:         { label: 'RENT',       cls: 'bg-slate-100 text-slate-600 border-slate-200' },
+  payment:             { label: 'PAYMENT',    cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+  deposit_collected:   { label: 'DEPOSIT',    cls: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
+  deposit_adjusted:    { label: 'DEPOSIT',    cls: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
+  deposit_refunded:    { label: 'REFUND',     cls: 'bg-red-100 text-red-600 border-red-200' },
+  adjustment:          { label: 'CHARGE',     cls: 'bg-blue-100 text-blue-700 border-blue-200' },
+  reservation_advance: { label: 'ADVANCE',    cls: 'bg-amber-100 text-amber-700 border-amber-200' },
+  refund:              { label: 'REFUND',     cls: 'bg-red-100 text-red-600 border-red-200' },
+}
+const LEDGER_TYPE_OPTIONS = [
+  { value: '',                    label: 'All Types' },
+  { value: 'rent_record',         label: 'Rent' },
+  { value: 'payment',             label: 'Payment' },
+  { value: 'deposit_collected',   label: 'Deposit Collected' },
+  { value: 'deposit_adjusted',    label: 'Deposit Adjusted' },
+  { value: 'deposit_refunded',    label: 'Deposit Refunded' },
+  { value: 'adjustment',          label: 'Manual Charge' },
+  { value: 'reservation_advance', label: 'Advance' },
+  { value: 'refund',              label: 'Refund' },
+]
+const PAYMENT_METHODS = [
+  ['cash','Cash'], ['upi','UPI'], ['bank_transfer','Bank Transfer'], ['cheque','Cheque'],
+]
+
+const fmtLedgerDate = (d) => {
+  if (!d) return '—'
+  const dt = new Date(d)
+  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' })
+}
+
+// Generate a CSV blob from ledger entries and trigger browser download
+const isRefundType = (referenceType) =>
+  referenceType === 'deposit_refunded' || referenceType === 'refund'
+
+const downloadLedgerCSV = (entries, tenantName) => {
+  const rows = [
+    ['Date', 'Description', 'Type', 'Method', 'Debit', 'Credit', 'Balance'].join(','),
+    ...entries.map(e => {
+      const showNeg  = e.type === 'debit' || isRefundType(e.referenceType)
+      const debit    = showNeg ? e.amount : ''
+      const credit   = !showNeg ? e.amount : ''
+      const desc     = (e.description ?? '').replace(/,/g, ';')
+      const badge    = LEDGER_BADGE[e.referenceType]?.label ?? e.referenceType
+      const method   = e.method ? e.method.replace(/_/g, ' ') : ''
+      return [fmtLedgerDate(e.createdAt), desc, badge, method, debit, credit, e.balanceAfter].join(',')
+    }),
+  ]
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `ledger-${(tenantName ?? 'tenant').replace(/\s+/g, '-').toLowerCase()}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Open a print window with a formatted HTML ledger
+const printLedgerPDF = (entries, tenant, currentBalance, depositBal) => {
+  const rows = entries.map(e => {
+    const showNeg = e.type === 'debit' || isRefundType(e.referenceType)
+    const badge   = LEDGER_BADGE[e.referenceType]?.label ?? e.referenceType
+    const amtClr  = showNeg ? '#dc2626' : '#16a34a'
+    const balClr  = e.balanceAfter > 0 ? '#dc2626' : e.balanceAfter < 0 ? '#16a34a' : '#64748b'
+    const methodTd = e.method ? `<td style="font-size:10px;color:#64748b">${e.method.replace(/_/g,' ')}</td>` : '<td>—</td>'
+    return `<tr>
+      <td>${fmtLedgerDate(e.createdAt)}</td>
+      <td>${e.description ?? '—'}</td>
+      <td><span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;background:#f1f5f9">${badge}</span></td>
+      ${methodTd}
+      <td style="text-align:right;color:${amtClr};font-weight:600">${showNeg ? '-' : '+'}₹${(e.amount ?? 0).toLocaleString('en-IN')}</td>
+      <td style="text-align:right;color:${balClr};font-weight:600">₹${Math.abs(e.balanceAfter ?? 0).toLocaleString('en-IN')}${e.balanceAfter < 0 ? ' (Adv)' : ''}</td>
+    </tr>`
+  }).join('')
+
+  const w = window.open('', '_blank')
+  w.document.write(`<!DOCTYPE html><html><head><title>Ledger — ${tenant?.name ?? ''}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; font-size: 12px; color: #1e293b; margin: 24px; }
+    h2   { font-size: 16px; margin-bottom: 4px; }
+    .meta { color: #64748b; font-size: 11px; margin-bottom: 16px; }
+    .summary { display: flex; gap: 24px; margin-bottom: 20px; padding: 12px 16px; background: #f8fafc; border-radius: 8px; }
+    .summary div { font-size: 11px; color: #64748b; }
+    .summary strong { display: block; font-size: 15px; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; }
+    th    { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; padding: 6px 8px; border-bottom: 2px solid #e2e8f0; }
+    td    { padding: 7px 8px; border-bottom: 1px solid #f1f5f9; font-size: 11.5px; }
+    @media print { body { margin: 8px; } }
+  </style></head><body>
+  <h2>Ledger Statement — ${tenant?.name ?? ''}</h2>
+  <p class="meta">Printed on ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+  <div class="summary">
+    <div>Balance Due <strong style="color:${currentBalance > 0 ? '#dc2626' : '#16a34a'}">₹${Math.abs(currentBalance).toLocaleString('en-IN')}${currentBalance < 0 ? ' (Advance)' : ''}</strong></div>
+    ${depositBal > 0 ? `<div>Deposit Balance <strong style="color:#7c3aed">₹${depositBal.toLocaleString('en-IN')}</strong></div>` : ''}
+    <div>Total Entries <strong>${entries.length}</strong></div>
+  </div>
+  <table><thead><tr><th>Date</th><th>Description</th><th>Type</th><th>Method</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr></thead>
+  <tbody>${rows}</tbody></table>
+  </body></html>`)
+  w.document.close()
+  w.print()
+}
+
 const RentHistoryItem = ({ rent }) => {
   const statusColor = {
     paid:    'text-emerald-700 bg-emerald-50 border border-emerald-200',
     pending: 'text-amber-700 bg-amber-50 border border-amber-200',
+    partial: 'text-orange-700 bg-orange-50 border border-orange-200',
     overdue: 'text-red-700 bg-red-50 border border-red-200',
   }
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -516,9 +689,185 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
   const rents = rentData?.data ?? []
   const totalPaid = rents.filter((r) => r.status === 'paid').reduce((s, r) => s + r.amount, 0)
 
+  // Ledger balance (from the financial layer)
+  const { data: ledgerData } = useApi(
+    () => getTenantLedger(propertyId, t._id),
+    [t._id]
+  )
+  const ledgerBalance  = ledgerData?.data?.currentBalance ?? (t.ledgerBalance ?? null)
+  const hasAdvance     = ledgerBalance !== null && ledgerBalance < 0
+  const hasDues        = ledgerBalance !== null && ledgerBalance > 0
+  const pendingDues    = rents
+    .filter(r => r.status === 'pending' || r.status === 'partial' || r.status === 'overdue')
+    .reduce((s, r) => s + (r.amount - (r.paidAmount ?? 0)), 0)
+
+  // Tenant invoices
+  const { data: invoiceData, loading: invoicesLoading } = useApi(
+    () => getInvoices(propertyId, { tenantId: t._id }),
+    [t._id]
+  )
+  const invoices = invoiceData?.data ?? []
+
+  // Reminder history for this tenant (last 5)
+  const { data: reminderData } = useApi(
+    () => getReminderLogs(propertyId, { tenantId: t._id, limit: 5 }),
+    [t._id]
+  )
+  const reminderHistory = reminderData?.data ?? []
+  const lastReminder    = reminderHistory[0] ?? null
+
+  // ── Reservation advance ──
+  const { data: advanceData, refetch: refetchAdvance } = useApi(
+    () => getTenantAdvance(propertyId, t._id),
+    [t._id]
+  )
+  const heldAdvance = advanceData?.data ?? null  // null = no held advance
+  const [advanceActing, setAdvanceActing] = useState(false)
+
+  const handleAdvanceApply = async () => {
+    setAdvanceActing(true)
+    try {
+      await applyTenantAdvance(propertyId, t._id)
+      refetchAdvance()
+      onRefetch?.()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to apply advance')
+    } finally {
+      setAdvanceActing(false)
+    }
+  }
+
+  const handleAdvanceRefund = async () => {
+    setAdvanceActing(true)
+    try {
+      await refundTenantAdvance(propertyId, t._id)
+      refetchAdvance()
+      onRefetch?.()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to mark refund')
+    } finally {
+      setAdvanceActing(false)
+    }
+  }
+
+  // ── Deposit actions ──
+  const [depositActing, setDepositActing] = useState(false)
+
+  const handleDepositAdjust = async () => {
+    if (!window.confirm('Apply the security deposit against outstanding dues?')) return
+    setDepositActing(true)
+    try {
+      await adjustDeposit(propertyId, t._id)
+      onRefetch?.()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to adjust deposit')
+    } finally {
+      setDepositActing(false)
+    }
+  }
+
+  const handleDepositRefund = async () => {
+    if (!window.confirm('Mark deposit as refunded to the tenant?')) return
+    setDepositActing(true)
+    try {
+      await refundDeposit(propertyId, t._id)
+      onRefetch?.()
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to refund deposit')
+    } finally {
+      setDepositActing(false)
+    }
+  }
+
   // ── Editable state ──
-  const [editing, setEditing] = useState(null) // 'personal' | 'documents' | 'agreement' | 'notes'
-  const [saving, setSaving]   = useState(false)
+  const [activeTab, setActiveTab]        = useState('overview') // 'overview' | 'ledger'
+  const [editing, setEditing]           = useState(null) // 'personal' | 'documents' | 'agreement' | 'notes'
+  const [saving, setSaving]             = useState(false)
+  const [rentHistoryOpen, setRentHistoryOpen] = useState(false)
+  const [invoicesOpen,    setInvoicesOpen]    = useState(false)
+
+  // ── Ledger tab state ──
+  const [ledgerPage,    setLedgerPage]    = useState(1)
+  const [ledgerFrom,    setLedgerFrom]    = useState('')
+  const [ledgerTo,      setLedgerTo]      = useState('')
+  const [ledgerType,    setLedgerType]    = useState('')
+  const [ledgerSearch,  setLedgerSearch]  = useState('')
+  const [ledgerEntries, setLedgerEntries] = useState([])
+  const [ledgerTotal,   setLedgerTotal]   = useState(0)
+  const [ledgerPages,   setLedgerPages]   = useState(1)
+  const [tabLedgerBalance, setLedgerBalanceState] = useState(null)
+  const [ledgerLoading, setLedgerLoading] = useState(false)
+  const [expandedEntry, setExpandedEntry] = useState(null)
+  // Quick action modals
+  const [payModal,      setPayModal]      = useState(false)
+  const [chargeModal,   setChargeModal]   = useState(false)
+  const [payAmt,        setPayAmt]        = useState('')
+  const [payMethod,     setPayMethod]     = useState('cash')
+  const [payNotes,      setPayNotes]      = useState('')
+  const [payRef,        setPayRef]        = useState('')
+  const [chargeAmt,     setChargeAmt]     = useState('')
+  const [chargeDesc,    setChargeDesc]    = useState('')
+  const [actionBusy,    setActionBusy]    = useState(false)
+
+  const LEDGER_LIMIT = 20
+
+  const fetchLedger = useCallback(async (page = 1, from = ledgerFrom, to = ledgerTo, type = ledgerType, search = ledgerSearch) => {
+    setLedgerLoading(true)
+    try {
+      const params = { page, limit: LEDGER_LIMIT }
+      if (from)   params.from  = from
+      if (to)     params.to    = to
+      if (type)   params.type  = type
+      if (search) params.q     = search
+      const res = await getTenantLedger(propertyId, t._id, params)
+      const d   = res.data?.data ?? {}
+      setLedgerEntries(d.entries ?? [])
+      setLedgerTotal(d.total ?? 0)
+      setLedgerPages(d.pages ?? 1)
+      setLedgerBalanceState(d.currentBalance ?? 0)
+    } catch (_) {}
+    finally { setLedgerLoading(false) }
+  }, [propertyId, t._id, ledgerFrom, ledgerTo, ledgerType])
+
+  useEffect(() => {
+    if (activeTab === 'ledger') fetchLedger(ledgerPage)
+  }, [activeTab, ledgerPage]) // eslint-disable-line
+
+  const handlePaySubmit = async () => {
+    const amt = Number(payAmt)
+    if (!amt || amt <= 0) return
+    setActionBusy(true)
+    try {
+      await recordPayment(propertyId, { tenantId: t._id, amount: amt, method: payMethod, notes: payNotes || undefined, referenceId: payRef || undefined })
+      setPayModal(false); setPayAmt(''); setPayNotes(''); setPayRef('')
+      fetchLedger(1)
+      onRefetch?.()
+    } catch (err) { alert(err.response?.data?.message || 'Failed to record payment') }
+    finally { setActionBusy(false) }
+  }
+
+  const handleChargeSubmit = async () => {
+    const amt = Number(chargeAmt)
+    if (!amt || amt <= 0) return
+    setActionBusy(true)
+    try {
+      await addCharge(propertyId, t._id, { amount: amt, description: chargeDesc || undefined })
+      setChargeModal(false); setChargeAmt(''); setChargeDesc('')
+      fetchLedger(1)
+      onRefetch?.()
+    } catch (err) { alert(err.response?.data?.message || 'Failed to add charge') }
+    finally { setActionBusy(false) }
+  }
+
+  const handleLedgerFilter = () => {
+    setLedgerPage(1)
+    fetchLedger(1, ledgerFrom, ledgerTo, ledgerType, ledgerSearch)
+  }
+
+  const handleLedgerReset = () => {
+    setLedgerFrom(''); setLedgerTo(''); setLedgerType(''); setLedgerSearch(''); setLedgerPage(1)
+    fetchLedger(1, '', '', '', '')
+  }
   const [form, setForm]       = useState({
     name:             t.name ?? '',
     phone:            t.phone ?? '',
@@ -699,20 +1048,250 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
         {/* Quick stats */}
         <div className="mt-4 grid grid-cols-3 gap-2">
           {[
-            { label: 'Monthly Rent', value: fmt(t.rentAmount) },
-            { label: 'Total Paid', value: fmt(totalPaid) },
-            { label: 'Deposit', value: fmt(t.depositAmount) },
-          ].map(({ label, value }) => (
+            { label: 'Monthly Rent', value: fmt(t.rentAmount), color: 'text-slate-700' },
+            {
+              label: ledgerBalance !== null ? (hasAdvance ? 'Advance' : hasDues ? 'Balance Due' : 'Settled') : 'Total Paid',
+              value: ledgerBalance !== null ? fmt(Math.abs(ledgerBalance)) : fmt(totalPaid),
+              color: hasAdvance ? 'text-emerald-600' : hasDues ? 'text-amber-600' : 'text-slate-400',
+            },
+            { label: 'Deposit', value: fmt(t.depositAmount), color: 'text-slate-700' },
+          ].map(({ label, value, color }) => (
             <div key={label} className="rounded-xl bg-white border border-slate-100 px-3 py-2.5 text-center">
               <p className="text-[10px] text-slate-400 font-medium">{label}</p>
-              <p className="text-sm font-bold text-slate-700 mt-0.5 tabular-nums">{value}</p>
+              <p className={`text-sm font-bold mt-0.5 tabular-nums ${color}`}>{value}</p>
             </div>
           ))}
         </div>
+        {/* Last reminder indicator */}
+        {lastReminder && (
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-100 bg-white px-3 py-2">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Bell size={11} className="text-slate-400" />
+              <span>Last reminder</span>
+              <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold capitalize ${
+                lastReminder.type === 'payment_confirmation' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : lastReminder.type === 'overdue'           ? 'bg-red-50 text-red-700 border-red-200'
+                : lastReminder.type === 'due_day'           ? 'bg-amber-50 text-amber-700 border-amber-200'
+                : 'bg-blue-50 text-blue-700 border-blue-200'
+              }`}>
+                {lastReminder.type === 'payment_confirmation' ? 'Payment' : lastReminder.type.replace('_', ' ')}
+              </span>
+            </div>
+            <span className="text-[11px] text-slate-400">
+              {(() => {
+                const diff = Date.now() - new Date(lastReminder.sentAt ?? lastReminder.createdAt).getTime()
+                const mins = Math.floor(diff / 60000)
+                if (mins < 60) return `${mins}m ago`
+                const hrs = Math.floor(mins / 60)
+                if (hrs < 24) return `${hrs}h ago`
+                return `${Math.floor(hrs / 24)}d ago`
+              })()}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Tab Bar ── */}
+      <div className="flex border-b border-slate-100 bg-white shrink-0">
+        {[
+          { id: 'overview', label: 'Overview', icon: User },
+          { id: 'ledger',   label: 'Ledger',   icon: BookOpen },
+        ].map(({ id, label, icon: Icon }) => (
+          <button key={id} type="button"
+            onClick={() => setActiveTab(id)}
+            className={`flex items-center gap-1.5 px-5 py-3 text-xs font-semibold border-b-2 transition-colors ${
+              activeTab === id
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}>
+            <Icon size={12} />
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* ── Scrollable Sections ── */}
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+      <div className={`flex-1 overflow-y-auto ${activeTab === 'overview' ? 'px-6 py-5 space-y-5' : 'p-0'}`}>
+
+        {activeTab === 'overview' && <>
+        {/* ── Financial Balance (from Ledger) ── */}
+        {ledgerBalance !== null && (
+          <div className={`rounded-2xl px-4 py-3.5 border ${
+            hasAdvance
+              ? 'bg-emerald-50 border-emerald-200'
+              : hasDues
+              ? 'bg-amber-50 border-amber-200'
+              : 'bg-slate-50 border-slate-200'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className={`text-[11px] font-semibold uppercase tracking-wide ${
+                  hasAdvance ? 'text-emerald-600' : hasDues ? 'text-amber-600' : 'text-slate-400'
+                }`}>
+                  {hasAdvance ? 'Advance Credit' : hasDues ? 'Outstanding Balance' : 'Fully Settled'}
+                </p>
+                <p className={`text-2xl font-bold tabular-nums mt-0.5 ${
+                  hasAdvance ? 'text-emerald-700' : hasDues ? 'text-amber-700' : 'text-slate-400'
+                }`}>
+                  {fmt(Math.abs(ledgerBalance))}
+                </p>
+                {hasDues && pendingDues > 0 && (
+                  <p className="text-xs text-amber-500 mt-0.5">
+                    {rents.filter(r => ['pending','partial','overdue'].includes(r.status)).length} open record{rents.filter(r => ['pending','partial','overdue'].includes(r.status)).length !== 1 ? 's' : ''}
+                  </p>
+                )}
+                {hasAdvance && (
+                  <p className="text-xs text-emerald-500 mt-0.5">Will be applied to next rent cycle</p>
+                )}
+              </div>
+              {hasDues && (
+                <div className="text-right space-y-1">
+                  {rents.filter(r => r.status === 'overdue').length > 0 && (
+                    <div className="flex items-center gap-1 justify-end">
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+                      <span className="text-[11px] font-semibold text-red-600">
+                        {rents.filter(r => r.status === 'overdue').length} overdue
+                      </span>
+                    </div>
+                  )}
+                  {rents.filter(r => r.status === 'partial').length > 0 && (
+                    <p className="text-[11px] text-amber-600">
+                      {rents.filter(r => r.status === 'partial').length} partial
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Reservation Advance ── */}
+        {heldAdvance && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 space-y-3">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100">
+                  <IndianRupee size={14} className="text-amber-600" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-widest text-amber-600">
+                    Reservation Advance
+                  </p>
+                  <p className="text-xl font-bold text-amber-800 tabular-nums leading-tight mt-0.5">
+                    {fmt(heldAdvance.reservationAmount)}
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-amber-600 bg-amber-100 border border-amber-200 rounded-full px-2.5 py-1">
+                Held
+              </span>
+            </div>
+
+            {/* Details */}
+            <div className="rounded-xl bg-white border border-amber-100 px-3.5 py-2.5 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-500">Bed</span>
+                <span className="font-semibold text-slate-700">
+                  {heldAdvance.roomNumber ? `Room ${heldAdvance.roomNumber} · ` : ''}Bed {heldAdvance.bedNumber}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-500">Mode</span>
+                <span className="font-semibold text-slate-700 capitalize">
+                  {heldAdvance.reservationMode === 'adjust' ? 'Adjust against rent' : 'Refund on cancel'}
+                </span>
+              </div>
+              {heldAdvance.reservedTill && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">Reserved till</span>
+                  <span className="font-semibold text-slate-700">
+                    {new Date(heldAdvance.reservedTill).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2">
+              <button type="button" disabled={advanceActing}
+                onClick={handleAdvanceApply}
+                className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 py-2.5 text-xs font-bold text-white transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                {advanceActing ? '…' : 'Apply to Rent'}
+              </button>
+              <button type="button" disabled={advanceActing}
+                onClick={handleAdvanceRefund}
+                className="flex-1 rounded-xl border border-amber-300 bg-white hover:bg-amber-50 py-2.5 text-xs font-bold text-amber-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                {advanceActing ? '…' : 'Mark Refunded'}
+              </button>
+            </div>
+
+            <p className="text-[10px] text-amber-600 leading-relaxed">
+              "Apply to Rent" credits this amount to the tenant's ledger balance.
+              "Mark Refunded" records a cash refund back to the tenant.
+            </p>
+          </div>
+        )}
+
+        {/* ── Security Deposit card ── */}
+        {t.depositAmount > 0 && t.depositPaid && t.depositStatus !== 'refunded' && t.depositStatus !== 'adjusted' && (
+          <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-violet-800">Security Deposit</p>
+                <p className="text-lg font-extrabold text-violet-700 leading-tight mt-0.5">
+                  ₹{(t.depositBalance ?? t.depositAmount ?? 0).toLocaleString('en-IN')}
+                </p>
+              </div>
+              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${
+                t.depositStatus === 'held' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-500'
+              }`}>
+                {t.depositStatus === 'held' ? 'Held' : 'Uncategorised'}
+              </span>
+            </div>
+
+            {/* Balance vs original breakdown if they differ */}
+            {t.depositBalance !== null && t.depositBalance !== t.depositAmount && (
+              <p className="text-[11px] text-violet-600">
+                Original: ₹{t.depositAmount.toLocaleString('en-IN')} · Remaining balance: ₹{(t.depositBalance ?? 0).toLocaleString('en-IN')}
+              </p>
+            )}
+
+            <div className="flex gap-2">
+              {pendingDues > 0 && (
+                <button type="button" disabled={depositActing}
+                  onClick={handleDepositAdjust}
+                  className="flex-1 rounded-xl bg-violet-600 hover:bg-violet-700 py-2.5 text-xs font-bold text-white transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                  {depositActing ? '…' : 'Adjust Against Dues'}
+                </button>
+              )}
+              <button type="button" disabled={depositActing}
+                onClick={handleDepositRefund}
+                className="flex-1 rounded-xl border border-violet-300 bg-white hover:bg-violet-50 py-2.5 text-xs font-bold text-violet-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                {depositActing ? '…' : 'Mark Refunded'}
+              </button>
+            </div>
+            <p className="text-[10px] text-violet-500 leading-relaxed">
+              "Adjust Against Dues" applies the deposit toward outstanding rent.
+              "Mark Refunded" records a cash return to the tenant.
+            </p>
+          </div>
+        )}
+
+        {/* Deposit refunded / adjusted badge (past state) */}
+        {t.depositAmount > 0 && t.depositPaid && (t.depositStatus === 'refunded' || t.depositStatus === 'adjusted') && (
+          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-700">Security Deposit</p>
+              <p className="text-xs text-slate-400 mt-0.5">₹{t.depositAmount.toLocaleString('en-IN')}</p>
+            </div>
+            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${
+              t.depositStatus === 'refunded' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+            }`}>
+              {t.depositStatus === 'refunded' ? 'Refunded' : 'Adjusted'}
+            </span>
+          </div>
+        )}
 
         {/* ── A. Personal Details ── */}
         <div className="space-y-2">
@@ -875,22 +1454,18 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
             </div>
           )}
 
-          {/* Deposit toggle */}
-          {t.depositAmount > 0 && (
+          {/* Deposit collected toggle — only shown when not yet collected */}
+          {t.depositAmount > 0 && !t.depositPaid && (
             <div className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3 bg-white">
               <div>
                 <p className="text-xs font-medium text-slate-700">Deposit Collected</p>
                 <p className="text-xs text-slate-400 mt-0.5">{fmt(t.depositAmount)}</p>
               </div>
               <button
-                onClick={() => onDepositToggle(t._id, !t.depositPaid)}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-                  t.depositPaid ? 'bg-primary-500' : 'bg-slate-200'
-                }`}
+                onClick={() => onDepositToggle(t._id, true)}
+                className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none bg-slate-200"
               >
-                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
-                  t.depositPaid ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                }`} />
+                <span className="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform translate-x-[3px]" />
               </button>
             </div>
           )}
@@ -963,63 +1538,49 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
         </div>
 
         {/* ── E. Rent Details (Billing Snapshot) ── */}
-        {t.billingSnapshot?.finalRent != null && (() => {
+        {t.billingSnapshot != null && (() => {
           const snap = t.billingSnapshot
-          const rentLabel = snap.rentType === 'per_room' ? 'Per Room' : 'Per Bed'
-          const showConsistencyWarning = snap.rentType === 'per_room'
-            && snap.roomCapacity > 1
-            && snap.occupiedAtAssign < (snap.roomCapacity - 1)
+          const rentLabel = snap.isExtra
+            ? 'Extra Bed (Fixed)'
+            : snap.rentType === 'per_room' ? 'Equal Split' : 'Fixed Rent'
+          const showConsistencyWarning = snap.rentType === 'per_room' && !snap.isExtra
           return (
             <div className="space-y-2">
               <SectionTitle icon={Calculator} title="Rent Details" />
               <div className="card px-4">
-                {/* Monthly Rent */}
+                {/* Monthly Rent — always from tenant.rentAmount, the single source of truth */}
                 <div className="py-2.5 border-b border-slate-100">
                   <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Monthly Rent</p>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <p className="text-lg font-bold text-slate-800 tabular-nums">{fmt(snap.finalRent)}</p>
-                    {snap.isEarlyOccupant && (
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-violet-600 bg-violet-50 border border-violet-200 rounded-full px-2 py-0.5">
-                        ✦ Early occupant
-                      </span>
-                    )}
-                  </div>
+                  <p className="text-lg font-bold text-slate-800 tabular-nums mt-0.5">{fmt(t.rentAmount)}</p>
                 </div>
                 {/* Rent Type */}
                 <div className="py-2.5 border-b border-slate-100">
                   <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Rent Type</p>
                   <span className={`inline-flex items-center mt-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                    snap.rentType === 'per_room'
-                      ? 'bg-blue-50 text-blue-600 border border-blue-200'
-                      : 'bg-slate-100 text-slate-600 border border-slate-200'
+                    snap.isExtra
+                      ? 'bg-violet-50 text-violet-600 border border-violet-200'
+                      : snap.rentType === 'per_room'
+                        ? 'bg-blue-50 text-blue-600 border border-blue-200'
+                        : 'bg-slate-100 text-slate-600 border border-slate-200'
                   }`}>
                     {rentLabel}
                   </span>
                 </div>
-                {/* Calculation (per_room only) */}
+                {/* Calculation context (per_room only) */}
                 {snap.rentType === 'per_room' && snap.divisorUsed && (
                   <div className="py-2.5 border-b border-slate-100">
                     <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Calculation</p>
                     <p className="text-sm font-medium text-slate-700 mt-0.5 tabular-nums">
-                      {fmt(snap.baseRent)} ÷ {snap.divisorUsed} = {fmt(snap.finalRent)}
+                      ₹{fmt(snap.baseRent)} ÷ {snap.divisorUsed} tenants
                     </p>
                   </div>
                 )}
-                {/* Occupancy at assignment */}
-                {snap.occupiedAtAssign != null && (
-                  <div className="py-2.5 border-b border-slate-100">
-                    <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Occupancy at Assignment</p>
-                    <p className="text-sm font-medium text-slate-700 mt-0.5">
-                      {snap.occupiedAtAssign + 1} / {snap.roomCapacity ?? '—'} beds
-                    </p>
-                  </div>
-                )}
-                {/* Override indicator with source */}
+                {/* Override indicator */}
                 {snap.overrideApplied && (
                   <div className="py-2.5 border-b border-slate-100">
                     <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Override</p>
                     <p className="text-xs text-amber-600 font-medium mt-0.5">
-                      ⚡ {snap.overrideSource === 'bed' ? 'Bed-level override' : 'Manual override'} was applied
+                      ⚡ {snap.overrideSource === 'bed' ? 'Bed-level override' : 'Manual override'} applied
                     </p>
                   </div>
                 )}
@@ -1052,7 +1613,93 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
           )
         })()}
 
-        {/* ── F. Rent & Payment ── */}
+        {/* ── F. Rent History (calculation audit trail) ── */}
+        {(t.rentHistory?.length ?? 0) > 0 && (() => {
+          const history = [...t.rentHistory].reverse() // newest first
+          return (
+            <div className="space-y-2">
+              {/* Header row with toggle */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100">
+                    <Clock size={14} className="text-slate-400" />
+                  </div>
+                  <h4 className="text-[13px] font-bold text-slate-700 tracking-tight">Rent History</h4>
+                  <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">
+                    {history.length}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRentHistoryOpen(v => !v)}
+                  className="text-[11px] font-semibold text-primary-600 hover:text-primary-700 flex items-center gap-1"
+                >
+                  {rentHistoryOpen ? 'Hide' : 'Show'}
+                  <span className={`text-[10px] transition-transform duration-200 inline-block ${rentHistoryOpen ? 'rotate-180' : ''}`}>▼</span>
+                </button>
+              </div>
+
+              {/* Timeline */}
+              {rentHistoryOpen && (
+                <div className="card overflow-hidden divide-y divide-slate-100">
+                  {history.map((entry, i) => {
+                    const diff     = (entry.newRent ?? 0) - (entry.oldRent ?? 0)
+                    const isFirst  = i === 0
+                    return (
+                      <div key={i} className={`px-4 py-3 ${isFirst ? 'bg-slate-50/60' : ''}`}>
+                        {/* Row 1: date + reason */}
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[11px] font-bold text-slate-600">
+                            {REASON_LABELS[entry.reason] ?? entry.reason ?? 'Updated'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 tabular-nums">
+                            {fdate(entry.changedAt)}
+                          </span>
+                        </div>
+                        {/* Row 2: rent delta */}
+                        <div className="flex items-center gap-2">
+                          {entry.oldRent != null && (
+                            <>
+                              <span className="text-[12px] text-slate-400 line-through tabular-nums">{fmt(entry.oldRent)}</span>
+                              <span className="text-[10px] text-slate-300">→</span>
+                            </>
+                          )}
+                          <span className={`text-[13px] font-bold tabular-nums ${
+                            diff > 0 ? 'text-red-600' : diff < 0 ? 'text-emerald-600' : 'text-slate-700'
+                          }`}>
+                            {fmt(entry.newRent ?? entry.rentAmount)}
+                          </span>
+                          {diff !== 0 && (
+                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full border tabular-nums ${
+                              diff > 0
+                                ? 'bg-red-50 border-red-200 text-red-600'
+                                : 'bg-emerald-50 border-emerald-200 text-emerald-600'
+                            }`}>
+                              {diff > 0 ? '+' : ''}{fmt(diff)}
+                            </span>
+                          )}
+                          {entry.source && (
+                            <span className="text-[10px] text-slate-400 ml-auto shrink-0">
+                              {SOURCE_LABELS[entry.source] ?? entry.source}
+                            </span>
+                          )}
+                        </div>
+                        {/* Row 3: traceId */}
+                        {entry.traceId && (
+                          <p className="text-[9px] font-mono text-slate-300 mt-1.5 select-all truncate" title={entry.traceId}>
+                            {entry.traceId}
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* ── G. Rent & Payment ── */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1079,6 +1726,163 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
           )}
         </div>
 
+        {/* ── H. Invoices ── */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50">
+                <FileText size={14} className="text-blue-500" />
+              </div>
+              <h4 className="text-[13px] font-bold text-slate-700 tracking-tight">Invoices</h4>
+              {invoices.length > 0 && (
+                <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">
+                  {invoices.length}
+                </span>
+              )}
+            </div>
+            {invoices.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setInvoicesOpen(v => !v)}
+                className="text-[11px] font-semibold text-primary-600 hover:text-primary-700 flex items-center gap-1"
+              >
+                {invoicesOpen ? 'Hide' : 'Show'}
+                <span className={`text-[10px] transition-transform duration-200 inline-block ${invoicesOpen ? 'rotate-180' : ''}`}>▼</span>
+              </button>
+            )}
+          </div>
+
+          {invoicesLoading ? (
+            <div className="flex justify-center py-4">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-100 border-t-primary-500" />
+            </div>
+          ) : invoices.length === 0 ? (
+            <div className="card px-4 py-4 text-center">
+              <p className="text-sm text-slate-400">No invoices generated yet</p>
+            </div>
+          ) : invoicesOpen ? (
+            <div className="space-y-2">
+              {invoices.map(inv => {
+                const statusCfg = {
+                  paid:    'bg-emerald-50 text-emerald-700 border-emerald-200',
+                  partial: 'bg-amber-50 text-amber-700 border-amber-200',
+                  unpaid:  'bg-red-50 text-red-700 border-red-200',
+                }
+                const MONTH_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+                const period  = inv.month ? `${MONTH_S[inv.month - 1]} ${inv.year}` : '—'
+                return (
+                  <div key={inv._id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white px-4 py-3 hover:border-slate-200 transition-colors">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-mono font-semibold text-primary-600">{inv.invoiceNumber}</p>
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize ${statusCfg[inv.status] ?? 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                          {inv.status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">{period}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-right mr-1">
+                        <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(inv.totalAmount)}</p>
+                        {inv.balance > 0 && (
+                          <p className="text-[10px] text-red-500 font-medium">{fmt(inv.balance)} due</p>
+                        )}
+                      </div>
+                      <a
+                        href={getInvoicePdfUrl(propertyId, inv._id)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Download PDF"
+                        className="rounded-lg p-1.5 text-slate-400 hover:bg-primary-50 hover:text-primary-600 transition-colors"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <Download size={13} />
+                      </a>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            /* Collapsed summary */
+            <div className="card px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3 text-xs text-slate-500">
+                <span className="text-emerald-600 font-semibold">{invoices.filter(i => i.status === 'paid').length} paid</span>
+                <span className="text-amber-600 font-semibold">{invoices.filter(i => i.status === 'partial').length} partial</span>
+                <span className="text-red-600 font-semibold">{invoices.filter(i => i.status === 'unpaid').length} unpaid</span>
+              </div>
+              <p className="text-xs font-bold text-slate-700 tabular-nums">
+                {fmt(invoices.reduce((s, i) => s + i.totalAmount, 0))} total
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── I. Reminder History ── */}
+        {reminderHistory.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50">
+                <Bell size={14} className="text-amber-500" />
+              </div>
+              <h4 className="text-[13px] font-bold text-slate-700 tracking-tight">Reminder History</h4>
+              <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">
+                {reminderHistory.length}
+              </span>
+            </div>
+            <div className="card px-4 divide-y divide-slate-100">
+              {reminderHistory.map((log) => {
+                const typeCfg = {
+                  pre_due:              { label: 'Pre-Due',  cls: 'bg-blue-50 text-blue-700 border-blue-200'       },
+                  due_day:              { label: 'Due Day',  cls: 'bg-amber-50 text-amber-700 border-amber-200'    },
+                  overdue:              { label: 'Overdue',  cls: 'bg-red-50 text-red-700 border-red-200'          },
+                  payment_confirmation: { label: 'Payment',  cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+                }[log.type] ?? { label: log.type, cls: 'bg-slate-100 text-slate-500 border-slate-200' }
+
+                const statusCfg = {
+                  sent:    'text-emerald-600',
+                  failed:  'text-red-500',
+                  pending: 'text-slate-400',
+                }[log.status] ?? 'text-slate-400'
+
+                const sentTime = (() => {
+                  const d = log.sentAt ?? log.createdAt
+                  if (!d) return '—'
+                  const diff = Date.now() - new Date(d).getTime()
+                  const mins = Math.floor(diff / 60000)
+                  if (mins < 60) return `${mins}m ago`
+                  const hrs = Math.floor(mins / 60)
+                  if (hrs < 24) return `${hrs}h ago`
+                  return `${Math.floor(hrs / 24)}d ago`
+                })()
+
+                return (
+                  <div key={log._id} className="flex items-center justify-between py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${typeCfg.cls}`}>
+                        {typeCfg.label}
+                      </span>
+                      <span className={`text-[11px] font-semibold capitalize ${statusCfg}`}>
+                        {log.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-400">{sentTime}</span>
+                      {log.meta?.waUrl && (
+                        <a href={log.meta.waUrl} target="_blank" rel="noreferrer"
+                          className="rounded p-1 text-slate-300 hover:text-green-600 hover:bg-green-50 transition-colors"
+                          onClick={e => e.stopPropagation()}>
+                          <MessageCircle size={11} />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── G. Notes ── */}
         <div className="space-y-2">
           <SectionTitle icon={Mail} title="Notes" section="notes" />
@@ -1104,6 +1908,385 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
             className="w-full btn-danger justify-center text-sm py-2.5 mt-2">
             <UserX size={15} /> Mark as Vacated
           </button>
+        )}
+        </>}
+
+        {/* ── LEDGER TAB ── */}
+        {activeTab === 'ledger' && (
+          <div className="flex flex-col h-full">
+
+            {/* Financial summary */}
+            <div className="px-5 pt-4 pb-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100 shrink-0">
+              <div className="grid grid-cols-2 gap-3">
+                <div className={`rounded-xl px-3.5 py-2.5 border ${
+                  tabLedgerBalance === null ? 'bg-slate-50 border-slate-200'
+                  : tabLedgerBalance > 0    ? 'bg-red-50 border-red-200'
+                  : tabLedgerBalance < 0    ? 'bg-emerald-50 border-emerald-200'
+                  :                           'bg-slate-50 border-slate-200'
+                }`}>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Current Balance</p>
+                  <p className={`text-lg font-extrabold tabular-nums mt-0.5 ${
+                    tabLedgerBalance === null ? 'text-slate-400'
+                    : tabLedgerBalance > 0   ? 'text-red-700'
+                    : tabLedgerBalance < 0   ? 'text-emerald-700'
+                    :                          'text-slate-400'
+                  }`}>
+                    {tabLedgerBalance === null ? '—'
+                      : tabLedgerBalance === 0 ? 'Settled'
+                      : `₹${Math.abs(tabLedgerBalance).toLocaleString('en-IN')}`}
+                  </p>
+                  {tabLedgerBalance !== null && tabLedgerBalance !== 0 && (
+                    <p className="text-[10px] mt-0.5 font-medium text-slate-400">
+                      {tabLedgerBalance > 0 ? 'Due' : 'Advance'}
+                    </p>
+                  )}
+                </div>
+                <div className={`rounded-xl px-3.5 py-2.5 border ${
+                  t.depositPaid && (t.depositBalance ?? 0) > 0
+                    ? 'bg-violet-50 border-violet-200'
+                    : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Deposit Balance</p>
+                  <p className={`text-lg font-extrabold tabular-nums mt-0.5 ${
+                    t.depositPaid && (t.depositBalance ?? 0) > 0 ? 'text-violet-700' : 'text-slate-400'
+                  }`}>
+                    {t.depositPaid && (t.depositBalance ?? 0) > 0
+                      ? `₹${(t.depositBalance ?? t.depositAmount ?? 0).toLocaleString('en-IN')}`
+                      : '—'}
+                  </p>
+                  <p className="text-[10px] mt-0.5 font-medium text-slate-400">
+                    {t.depositStatus === 'held' ? 'Held' : t.depositStatus === 'refunded' ? 'Refunded' : t.depositStatus === 'adjusted' ? 'Adjusted' : 'Not collected'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2 shrink-0">
+              {t.status !== 'vacated' && (
+                <>
+                  <button type="button" onClick={() => { setPayAmt(''); setPayNotes(''); setPayRef(''); setPayMethod('cash'); setPayModal(true) }}
+                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white transition-colors shadow-sm">
+                    <CreditCard size={12} /> Record Payment
+                  </button>
+                  <button type="button" onClick={() => { setChargeAmt(''); setChargeDesc(''); setChargeModal(true) }}
+                    className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-600 transition-colors shadow-sm">
+                    <Zap size={12} /> Add Charge
+                  </button>
+                  {pendingDues > 0 && t.depositPaid && (t.depositBalance ?? 0) > 0 && t.depositStatus !== 'adjusted' && (
+                    <button type="button" disabled={depositActing}
+                      onClick={handleDepositAdjust}
+                      className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 hover:bg-violet-100 px-3.5 py-2 text-xs font-bold text-violet-700 transition-colors shadow-sm disabled:opacity-50">
+                      Adjust Deposit
+                    </button>
+                  )}
+                </>
+              )}
+              <div className="ml-auto flex items-center gap-1.5">
+                <button type="button"
+                  onClick={() => downloadLedgerCSV(ledgerEntries, t.name)}
+                  title="Download CSV"
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-2 text-slate-500 transition-colors">
+                  <Download size={13} />
+                </button>
+                <button type="button"
+                  onClick={() => printLedgerPDF(ledgerEntries, t, tabLedgerBalance ?? 0, t.depositBalance ?? t.depositAmount ?? 0)}
+                  title="Print / PDF"
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-2 text-slate-500 transition-colors">
+                  <FileText size={13} />
+                </button>
+                <button type="button" onClick={() => fetchLedger(ledgerPage)} title="Refresh"
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-2 text-slate-500 transition-colors">
+                  <RefreshCw size={13} className={ledgerLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+            </div>
+
+            {/* Filters */}
+            <div className="px-5 py-2.5 border-b border-slate-100 shrink-0 space-y-2">
+              {/* Search */}
+              <div className="relative">
+                <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <input type="text" className="input text-xs py-1.5 pl-8"
+                  placeholder="Search notes or reference…"
+                  value={ledgerSearch} onChange={e => setLedgerSearch(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleLedgerFilter()} />
+              </div>
+              {/* Date range */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="label text-[10px]">From</label>
+                  <input type="date" className="input text-xs py-1.5"
+                    value={ledgerFrom} onChange={e => setLedgerFrom(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label text-[10px]">To</label>
+                  <input type="date" className="input text-xs py-1.5"
+                    value={ledgerTo} onChange={e => setLedgerTo(e.target.value)} />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <select className="input text-xs py-1.5 flex-1"
+                  value={ledgerType} onChange={e => setLedgerType(e.target.value)}>
+                  {LEDGER_TYPE_OPTIONS.map(({ value, label }) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={handleLedgerFilter}
+                  className="rounded-xl bg-primary-500 hover:bg-primary-600 px-3 py-1.5 text-xs font-bold text-white transition-colors flex items-center gap-1">
+                  <Filter size={11} /> Filter
+                </button>
+                {(ledgerFrom || ledgerTo || ledgerType || ledgerSearch) && (
+                  <button type="button" onClick={handleLedgerReset}
+                    className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 transition-colors">
+                    <X size={11} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Ledger table */}
+            <div className="flex-1 overflow-y-auto">
+              {ledgerLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-100 border-t-primary-500" />
+                </div>
+              ) : ledgerEntries.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center px-8">
+                  <div className="h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                    <BookOpen size={20} className="text-slate-400" />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-500">No transactions yet</p>
+                  <p className="text-xs text-slate-400 mt-1">Ledger entries will appear here once rent or payments are recorded.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Header row */}
+                  <div className="sticky top-0 z-10 grid grid-cols-[72px_1fr_76px_72px_68px] gap-0 bg-slate-50/95 backdrop-blur-sm border-b border-slate-200 px-4 py-2">
+                    {['Date','Description','Type','Amount','Balance'].map(h => (
+                      <p key={h} className="text-[9px] font-bold uppercase tracking-widest text-slate-400">{h}</p>
+                    ))}
+                  </div>
+
+                  {/* Entry rows */}
+                  {ledgerEntries.map((entry, idx) => {
+                    const isDebit    = entry.type === 'debit'
+                    // Refunds (deposit_refunded, refund) show as negative even though stored as 'credit'
+                    const showNegative = isDebit || entry.referenceType === 'deposit_refunded' || entry.referenceType === 'refund'
+                    const badge      = LEDGER_BADGE[entry.referenceType] ?? { label: entry.referenceType?.toUpperCase(), cls: 'bg-slate-100 text-slate-600 border-slate-200' }
+                    const isLatest   = idx === 0 && ledgerPage === 1
+                    const isExpanded = expandedEntry === entry._id
+                    const balClr     = entry.balanceAfter > 0 ? 'text-red-600' : entry.balanceAfter < 0 ? 'text-emerald-600' : 'text-slate-400'
+
+                    return (
+                      <div key={entry._id}>
+                        <button type="button"
+                          onClick={() => setExpandedEntry(isExpanded ? null : entry._id)}
+                          className={`w-full grid grid-cols-[72px_1fr_76px_72px_68px] gap-0 px-4 py-3 text-left border-b border-slate-100 transition-colors ${
+                            isLatest ? 'bg-emerald-50/40' : 'hover:bg-slate-50'
+                          } ${isExpanded ? 'bg-slate-50' : ''}`}>
+                          {/* Date */}
+                          <div className="flex items-center">
+                            <span className="text-[11px] text-slate-500 tabular-nums leading-tight">{fmtLedgerDate(entry.createdAt)}</span>
+                          </div>
+                          {/* Description */}
+                          <div className="flex items-center pr-2 min-w-0">
+                            <span className="text-xs text-slate-700 font-medium truncate">{entry.description ?? '—'}</span>
+                          </div>
+                          {/* Type badge */}
+                          <div className="flex items-center">
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${badge.cls}`}>
+                              {badge.label}
+                            </span>
+                          </div>
+                          {/* Amount */}
+                          <div className="flex items-center justify-end pr-1">
+                            <span className={`text-xs font-bold tabular-nums ${showNegative ? 'text-red-600' : 'text-emerald-600'}`}>
+                              {showNegative ? '-' : '+'}₹{(entry.amount ?? 0).toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                          {/* Balance */}
+                          <div className="flex items-center justify-end">
+                            <span className={`text-xs font-semibold tabular-nums ${balClr}`}>
+                              ₹{Math.abs(entry.balanceAfter ?? 0).toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </button>
+
+                        {/* Expanded detail row */}
+                        {isExpanded && (
+                          <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 space-y-1">
+                            {entry.method && (
+                              <div className="flex gap-2 text-xs">
+                                <span className="text-slate-400 w-20 shrink-0">Method</span>
+                                <span className="text-slate-600 capitalize">{entry.method.replace(/_/g, ' ')}</span>
+                              </div>
+                            )}
+                            {entry.description && (
+                              <div className="flex gap-2 text-xs">
+                                <span className="text-slate-400 w-20 shrink-0">Notes</span>
+                                <span className="text-slate-600">{entry.description}</span>
+                              </div>
+                            )}
+                            <div className="flex gap-2 text-xs">
+                              <span className="text-slate-400 w-20 shrink-0">Reference</span>
+                              <span className="font-mono text-[10px] text-slate-500 select-all">{String(entry.referenceId ?? '—')}</span>
+                            </div>
+                            <div className="flex gap-2 text-xs">
+                              <span className="text-slate-400 w-20 shrink-0">Entry ID</span>
+                              <span className="font-mono text-[10px] text-slate-500 select-all">{String(entry._id)}</span>
+                            </div>
+                            <div className="flex gap-2 text-xs">
+                              <span className="text-slate-400 w-20 shrink-0">Time</span>
+                              <span className="text-slate-500">{new Date(entry.createdAt).toLocaleString('en-IN')}</span>
+                            </div>
+                            <div className="flex gap-2 text-xs">
+                              <span className="text-slate-400 w-20 shrink-0">Balance After</span>
+                              <span className={`font-semibold ${entry.balanceAfter > 0 ? 'text-red-600' : entry.balanceAfter < 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                ₹{Math.abs(entry.balanceAfter ?? 0).toLocaleString('en-IN')}
+                                {entry.balanceAfter < 0 ? ' (Advance)' : entry.balanceAfter > 0 ? ' (Due)' : ' (Settled)'}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                  {/* Pagination */}
+                  {ledgerPages > 1 && (
+                    <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 shrink-0">
+                      <p className="text-xs text-slate-400">
+                        {((ledgerPage - 1) * LEDGER_LIMIT) + 1}–{Math.min(ledgerPage * LEDGER_LIMIT, ledgerTotal)} of {ledgerTotal}
+                      </p>
+                      <div className="flex items-center gap-1">
+                        <button type="button" disabled={ledgerPage <= 1}
+                          onClick={() => setLedgerPage(p => p - 1)}
+                          className="rounded-lg border border-slate-200 p-1.5 disabled:opacity-30 hover:bg-slate-50 transition-colors">
+                          <ChevronLeft size={12} />
+                        </button>
+                        <span className="text-xs font-semibold text-slate-600 px-2">{ledgerPage} / {ledgerPages}</span>
+                        <button type="button" disabled={ledgerPage >= ledgerPages}
+                          onClick={() => setLedgerPage(p => p + 1)}
+                          className="rounded-lg border border-slate-200 p-1.5 disabled:opacity-30 hover:bg-slate-50 transition-colors">
+                          <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* ── Record Payment Modal ── */}
+            {payModal && (
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+                onClick={e => e.target === e.currentTarget && setPayModal(false)}>
+                <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="h-7 w-7 rounded-lg bg-emerald-100 flex items-center justify-center">
+                        <CreditCard size={14} className="text-emerald-600" />
+                      </div>
+                      <p className="text-sm font-bold text-slate-800">Record Payment</p>
+                    </div>
+                    <button onClick={() => setPayModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <div className="px-5 py-4 space-y-3">
+                    {tabLedgerBalance !== null && tabLedgerBalance > 0 && (
+                      <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5">
+                        <p className="text-xs font-semibold text-amber-800">
+                          Outstanding: ₹{tabLedgerBalance.toLocaleString('en-IN')}
+                        </p>
+                      </div>
+                    )}
+                    <div>
+                      <label className="label text-xs">Amount (₹) *</label>
+                      <input type="number" min="1" className="input text-sm" autoFocus
+                        placeholder="0"
+                        value={payAmt} onChange={e => setPayAmt(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-xs">Payment Method</label>
+                      <select className="input text-sm" value={payMethod} onChange={e => setPayMethod(e.target.value)}>
+                        {PAYMENT_METHODS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label text-xs">Reference / UTR <span className="text-slate-400 font-normal">(optional)</span></label>
+                      <input type="text" className="input text-sm"
+                        placeholder="UPI ref, cheque number…"
+                        value={payRef} onChange={e => setPayRef(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-xs">Notes <span className="text-slate-400 font-normal">(optional)</span></label>
+                      <textarea className="input text-sm resize-none" rows={2}
+                        placeholder="Payment notes…"
+                        value={payNotes} onChange={e => setPayNotes(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="px-5 pb-5 flex gap-2.5">
+                    <button className="btn-secondary flex-1 text-xs" onClick={() => setPayModal(false)}>Cancel</button>
+                    <button
+                      disabled={actionBusy || !Number(payAmt) || Number(payAmt) <= 0}
+                      onClick={handlePaySubmit}
+                      className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white transition-colors disabled:opacity-50">
+                      {actionBusy ? 'Recording…' : `Record ₹${Number(payAmt) > 0 ? Number(payAmt).toLocaleString('en-IN') : '0'}`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Add Charge Modal ── */}
+            {chargeModal && (
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+                onClick={e => e.target === e.currentTarget && setChargeModal(false)}>
+                <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="h-7 w-7 rounded-lg bg-blue-100 flex items-center justify-center">
+                        <Zap size={14} className="text-blue-600" />
+                      </div>
+                      <p className="text-sm font-bold text-slate-800">Add Manual Charge</p>
+                    </div>
+                    <button onClick={() => setChargeModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <div className="px-5 py-4 space-y-3">
+                    <div className="rounded-xl bg-blue-50 border border-blue-200 px-3.5 py-2.5">
+                      <p className="text-xs text-blue-700">Adds a debit charge to the tenant's ledger (damage, maintenance, extra services, etc.)</p>
+                    </div>
+                    <div>
+                      <label className="label text-xs">Amount (₹) *</label>
+                      <input type="number" min="1" className="input text-sm" autoFocus
+                        placeholder="0"
+                        value={chargeAmt} onChange={e => setChargeAmt(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-xs">Description *</label>
+                      <input type="text" className="input text-sm"
+                        placeholder="e.g. Damage charge — broken window"
+                        value={chargeDesc} onChange={e => setChargeDesc(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="px-5 pb-5 flex gap-2.5">
+                    <button className="btn-secondary flex-1 text-xs" onClick={() => setChargeModal(false)}>Cancel</button>
+                    <button
+                      disabled={actionBusy || !Number(chargeAmt) || Number(chargeAmt) <= 0}
+                      onClick={handleChargeSubmit}
+                      className="flex-1 rounded-xl bg-blue-600 hover:bg-blue-700 px-4 py-2.5 text-xs font-bold text-white transition-colors disabled:opacity-50">
+                      {actionBusy ? 'Adding…' : `Add ₹${Number(chargeAmt) > 0 ? Number(chargeAmt).toLocaleString('en-IN') : '0'} Charge`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
         )}
       </div>
     </div>
@@ -1288,8 +2471,12 @@ const Tenants = () => {
 
   const handleDepositToggle = async (id, paid) => {
     try {
-      await markDepositPaid(propertyId, id, paid)
-      setProfile(prev => prev ? { ...prev, depositPaid: paid } : prev)
+      // When marking as collected, also initialise depositBalance + depositStatus
+      const extra = paid
+        ? { depositBalance: profile?.depositAmount ?? 0, depositStatus: 'held' }
+        : {}
+      await markDepositPaid(propertyId, id, paid, profile?.depositAmount)
+      setProfile(prev => prev ? { ...prev, depositPaid: paid, ...extra } : prev)
       refetch()
     } catch (err) { alert(err.response?.data?.message || 'Error updating deposit status') }
   }

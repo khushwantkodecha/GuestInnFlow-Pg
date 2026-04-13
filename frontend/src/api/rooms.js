@@ -9,6 +9,8 @@ export const getBeds = (propertyId, roomId) =>
   api.get(`/properties/${propertyId}/rooms/${roomId}/beds`)
 export const createBed = (propertyId, roomId, data) =>
   api.post(`/properties/${propertyId}/rooms/${roomId}/beds`, data)
+export const deleteBed = (propertyId, roomId, bedId) =>
+  api.delete(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}`)
 export const assignTenant = (propertyId, roomId, bedId, data) =>
   api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/assign`, data)
 export const checkoutBed = (propertyId, roomId, bedId) =>
@@ -29,11 +31,20 @@ export const unblockBed = (propertyId, roomId, bedId) =>
 export const createExtraBed = (propertyId, roomId, data) =>
   api.post(`/properties/${propertyId}/rooms/${roomId}/beds/extra`, data)
 
+export const rentPreview = (propertyId, roomId, bedId) =>
+  api.get(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/rent-preview`)
+
 export const getRoomAnalytics = (propertyId, roomId) =>
   api.get(`/properties/${propertyId}/rooms/${roomId}/analytics`)
 
 export const getRoomFinancials = (propertyId, roomId) =>
   api.get(`/properties/${propertyId}/rooms/${roomId}/financials`)
+
+export const getRoomActivity = (propertyId, roomId) =>
+  api.get(`/properties/${propertyId}/rooms/${roomId}/activity`)
+
+export const changeBed = (propertyId, roomId, bedId, data) =>
+  api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/change-room`, data)
 
 // Bulk operations
 export const bulkBlockBeds = (propertyId, roomId, bedIds) =>

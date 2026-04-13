@@ -1,9 +1,10 @@
-const Property = require('../models/Property');
-const Room = require('../models/Room');
-const Bed = require('../models/Bed');
-const Tenant = require('../models/Tenant');
+const Property    = require('../models/Property');
+const Room        = require('../models/Room');
+const Bed         = require('../models/Bed');
+const Tenant      = require('../models/Tenant');
 const RentPayment = require('../models/RentPayment');
-const Expense = require('../models/Expense');
+const Payment     = require('../models/Payment');
+const Expense     = require('../models/Expense');
 const asyncHandler = require('../utils/asyncHandler');
 
 /**
@@ -47,6 +48,9 @@ const computeStats = async (propertyIds) => {
     expectedRentResult,
     expenseStats,
     depositStats,
+    overCapacityResult,
+    totalRevenueResult,
+    pendingDuesResult,
   ] = await Promise.all([
 
     // 1. Total active rooms
@@ -106,6 +110,60 @@ const computeStats = async (propertyIds) => {
         },
       },
     ]),
+
+    // 10. Total revenue = sum of all recorded payments (all time)
+    Payment.aggregate([
+      { $match: { property: { $in: propertyIds } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]),
+
+    // 11. Pending dues = sum of remaining balance across all non-paid rent records
+    RentPayment.aggregate([
+      {
+        $match: {
+          property: { $in: propertyIds },
+          status:   { $in: ['pending', 'partial', 'overdue'] },
+        },
+      },
+      {
+        $group: {
+          _id:  null,
+          total: { $sum: '$balance' },
+        },
+      },
+    ]),
+
+    // 9. Over-capacity rooms — rooms where total active beds > stated capacity
+    Room.aggregate([
+      { $match: { property: { $in: propertyIds }, isActive: true } },
+      {
+        $lookup: {
+          from: 'beds',
+          let: { roomId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$room', '$$roomId'] },
+                    { $eq: ['$isActive', true] },
+                  ],
+                },
+              },
+            },
+            { $count: 'n' },
+          ],
+          as: 'bedCounts',
+        },
+      },
+      {
+        $project: {
+          capacity: 1,
+          totalBeds: { $ifNull: [{ $arrayElemAt: ['$bedCounts.n', 0] }, 0] },
+        },
+      },
+      { $match: { $expr: { $gt: ['$totalBeds', '$capacity'] } } },
+    ]),
   ]);
 
   // ── Shape results ──────────────────────────────────────────────────────────
@@ -140,12 +198,19 @@ const computeStats = async (propertyIds) => {
   for (const e of expenseStats) expenseBreakdown[e._id] = e.total;
   const totalExpenses = Object.values(expenseBreakdown).reduce((sum, v) => sum + v, 0);
 
+  const overCapacityRooms = overCapacityResult.length;
+  const overCapacityBeds  = overCapacityResult.reduce((sum, r) => sum + (r.totalBeds - r.capacity), 0);
+  const totalRevenue      = totalRevenueResult[0]?.total ?? 0;
+  const pendingDues       = pendingDuesResult[0]?.total   ?? 0;
+
   return {
     properties: {
       total: propertyIds.length,
     },
     rooms: {
       total: totalRooms,
+      overCapacity: overCapacityRooms,
+      overCapacityBeds,
     },
     beds: {
       total: totalBeds,
@@ -172,6 +237,9 @@ const computeStats = async (propertyIds) => {
       totalExpenses,
       netIncome: collectedRent + collectedDeposit - totalExpenses,
       collectionRate: expectedRent > 0 ? Math.round((collectedRent / expectedRent) * 100) : 0,
+      // Financial layer metrics
+      totalRevenue,   // sum of all Payment records (all time)
+      pendingDues,    // sum of balance across non-paid RentPayment records
       breakdown: {
         paid:    { amount: rentMap.paid.totalAmount,                                                    count: rentMap.paid.count },
         pending: { amount: rentMap.pending.totalAmount - (rentMap.pending.totalPaid ?? 0),              count: rentMap.pending.count },
@@ -236,7 +304,7 @@ const getPropertyDashboard = asyncHandler(async (req, res) => {
 // Zero-value stats returned when user has no properties yet
 const emptyStats = (totalProperties = 0) => ({
   properties: { total: totalProperties },
-  rooms:      { total: 0 },
+  rooms:      { total: 0, overCapacity: 0, overCapacityBeds: 0 },
   beds:       { total: 0, occupied: 0, vacant: 0, reserved: 0, occupancyRate: 0 },
   tenants:    { active: 0, onNotice: 0, total: 0, newCheckInsThisMonth: 0 },
   financials: {
@@ -244,6 +312,7 @@ const emptyStats = (totalProperties = 0) => ({
     year: new Date().getFullYear(),
     expectedRent: 0, collectedRent: 0, collectedDeposit: 0, totalCollected: 0,
     pendingRent: 0, overdueRent: 0, totalExpenses: 0, netIncome: 0, collectionRate: 0,
+    totalRevenue: 0, pendingDues: 0,
     breakdown: {
       paid:    { amount: 0, count: 0 },
       pending: { amount: 0, count: 0 },

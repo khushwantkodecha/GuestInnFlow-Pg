@@ -653,6 +653,32 @@ const Dashboard = () => {
         </div>
       </div>
 
+      {/* ── Over-Capacity Alert ── */}
+      {(d.rooms.overCapacity ?? 0) > 0 && (
+        <div>
+          <SectionLabel>Alerts</SectionLabel>
+          <div className="rounded-2xl border border-red-200 bg-gradient-to-r from-red-50 to-red-50/40 p-5 flex items-start gap-4">
+            <div className="h-10 w-10 shrink-0 rounded-xl bg-red-100 border border-red-200 flex items-center justify-center">
+              <AlertTriangle size={18} className="text-red-500" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-red-700">
+                {d.rooms.overCapacity} Over-Capacity Room{d.rooms.overCapacity > 1 ? 's' : ''}
+              </p>
+              <p className="text-xs text-red-600/80 mt-1 leading-relaxed">
+                {d.rooms.overCapacity > 1 ? 'These rooms have' : 'This room has'} more beds than stated capacity
+                {(d.rooms.overCapacityBeds ?? 0) > 0 && ` (${d.rooms.overCapacityBeds} extra bed${d.rooms.overCapacityBeds > 1 ? 's' : ''})`}.
+                Review extra beds or update the room capacity.
+              </p>
+            </div>
+            <a href="/rooms"
+              className="shrink-0 flex items-center gap-1 rounded-xl border border-red-200 bg-white/60 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-white hover:border-red-300 transition-all duration-150">
+              View <ChevronRight size={12} />
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* ── Occupancy Overview + Rent Collection ── */}
       <div>
         <SectionLabel>Occupancy & Collection</SectionLabel>

@@ -15,15 +15,16 @@ const validate = (schema) => (req, res, next) => {
   const result = schema.safeParse(req.body)
 
   if (!result.success) {
-    const errors = result.error.errors.map((e) => ({
-      field:   e.path.join('.') || 'body',
+    const issues = result.error.issues ?? result.error.errors ?? []
+    const errors = issues.map((e) => ({
+      field:   (e.path ?? []).join('.') || 'body',
       message: e.message,
     }))
 
     return res.status(400).json({
       success: false,
-      message: errors[0].message,   // human-readable first error for toasts
-      errors,                        // full list for programmatic consumers
+      message: errors[0]?.message ?? 'Validation failed',
+      errors,
     })
   }
 

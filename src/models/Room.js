@@ -67,6 +67,13 @@ const roomSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    // ── Bed numbering style (immutable after creation) ───────────────────────
+    bedNumberingType: {
+      type:    String,
+      enum:    ['alphabet', 'numeric'],
+      default: 'alphabet',
+    },
   },
   { timestamps: true }
 );

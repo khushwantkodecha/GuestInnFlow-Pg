@@ -40,6 +40,9 @@ const createRoomSchema = z
     category:            z.enum(['standard', 'premium', 'luxury']).default('standard'),
     notes:               z.string().trim().max(500).optional(),
     amenities:           z.array(z.string().trim()).optional(),
+
+    // Bed numbering — immutable after creation; stripped from update schema
+    bedNumberingType: z.enum(['alphabet', 'numeric']).default('alphabet'),
   })
   .superRefine((data, ctx) => {
     if (data.type === 'dormitory' && !data.capacity) {
@@ -52,6 +55,7 @@ const createRoomSchema = z
   })
 
 // ── Update ────────────────────────────────────────────────────────────────────
+// bedNumberingType intentionally omitted — Zod strips it on update
 const updateRoomSchema = z.object({
   roomNumber: z
     .string()

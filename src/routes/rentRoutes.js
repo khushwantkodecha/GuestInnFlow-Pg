@@ -5,6 +5,9 @@ const {
   getPendingRents,
   getOverdueRents,
   getTenantRentHistory,
+  recordPayment,
+  getTenantLedger,
+  addManualCharge,
   markRentAsPaid,
 } = require('../controllers/rentController');
 const { protect } = require('../middleware/auth');
@@ -18,8 +21,19 @@ router.use(protect);
 router.get('/pending', getPendingRents);
 router.get('/overdue', getOverdueRents);
 
+// Tenant-scoped: rent history + ledger + manual charge
+router.get( '/tenants/:tenantId/rents',  getTenantRentHistory);
+router.get( '/tenants/:tenantId/ledger', getTenantLedger);
+router.post('/tenants/:tenantId/charge', addManualCharge);
+
+// Payments (full financial tracking — preferred over PATCH /:id/pay)
+router.post('/payments', recordPayment);
+
+// Rent record CRUD
 router.route('/').get(getAllRents);
 router.post('/generate', generateMonthlyRent);
+
+// Legacy pay endpoint — kept for backward compat
 router.patch('/:id/pay', markRentAsPaid);
 
 module.exports = router;

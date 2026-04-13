@@ -1,12 +1,11 @@
-const Property = require('../models/Property');
+const Property    = require('../models/Property');
 const RentPayment = require('../models/RentPayment');
 const rentService = require('../services/rentService');
 const asyncHandler = require('../utils/asyncHandler');
 
 // Verify property belongs to the logged-in user
-const verifyOwnership = async (propertyId, userId) => {
-  return Property.findOne({ _id: propertyId, owner: userId, isActive: true });
-};
+const verifyOwnership = async (propertyId, userId) =>
+  Property.findOne({ _id: propertyId, owner: userId, isActive: true });
 
 // ─── Generate ────────────────────────────────────────────────────────────────
 
@@ -18,9 +17,9 @@ const generateMonthlyRent = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
 
-  const now = new Date();
+  const now   = new Date();
   const month = parseInt(req.body.month) || now.getMonth() + 1;
-  const year = parseInt(req.body.year) || now.getFullYear();
+  const year  = parseInt(req.body.year)  || now.getFullYear();
 
   if (month < 1 || month > 12) {
     return res.status(400).json({ success: false, message: 'month must be between 1 and 12' });
@@ -38,7 +37,7 @@ const generateMonthlyRent = asyncHandler(async (req, res) => {
   res.status(201).json({
     success: true,
     message: `Rent generated for ${month}/${year}`,
-    data: { created: created.length, skipped: skipped.length, records: created, skipped },
+    data:    { created: created.length, skipped: skipped.length, records: created, skipped },
   });
 });
 
@@ -56,16 +55,20 @@ const getAllRents = asyncHandler(async (req, res) => {
   await rentService.syncOverdueRents(req.params.propertyId);
 
   const filter = { property: req.params.propertyId };
-  if (req.query.status) filter.status = req.query.status;
-  if (req.query.month) filter.month = parseInt(req.query.month);
-  if (req.query.year) filter.year = parseInt(req.query.year);
+  if (req.query.status)   filter.status = req.query.status;
+  if (req.query.month)    filter.month  = parseInt(req.query.month);
+  if (req.query.year)     filter.year   = parseInt(req.query.year);
   if (req.query.tenantId) filter.tenant = req.query.tenantId;
 
   const rents = await RentPayment.find(filter)
     .populate({
       path: 'tenant',
-      select: 'name phone rentAmount dueDate',
-      populate: { path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } },
+      select: 'name phone rentAmount dueDate ledgerBalance',
+      populate: {
+        path: 'bed',
+        select: 'bedNumber room',
+        populate: { path: 'room', select: 'roomNumber floor' },
+      },
     })
     .sort({ dueDate: 1 });
 
@@ -105,25 +108,125 @@ const getTenantRentHistory = asyncHandler(async (req, res) => {
 
   const rents = await RentPayment.find({
     property: req.params.propertyId,
-    tenant: req.params.tenantId,
+    tenant:   req.params.tenantId,
   }).sort({ year: -1, month: -1 });
 
   res.json({ success: true, count: rents.length, data: rents });
 });
 
-// ─── Pay ──────────────────────────────────────────────────────────────────────
+// ─── Payment (new — replaces per-record markAsPaid for tracked flow) ──────────
+
+/**
+ * POST /api/properties/:propertyId/rents/payments
+ * Body: { tenantId, amount, method, referenceId?, paymentDate?, notes? }
+ *
+ * Records a payment and allocates it oldest-first across all open records
+ * for that tenant. Creates a Payment document and a LedgerEntry credit.
+ */
+const recordPayment = asyncHandler(async (req, res) => {
+  const property = await verifyOwnership(req.params.propertyId, req.user._id);
+  if (!property) {
+    return res.status(404).json({ success: false, message: 'Property not found' });
+  }
+
+  const { tenantId, amount, method, referenceId, paymentDate, notes } = req.body;
+
+  if (!tenantId) {
+    return res.status(400).json({ success: false, message: 'tenantId is required' });
+  }
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+    return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+  }
+
+  const result = await rentService.allocatePayment(
+    req.params.propertyId,
+    tenantId,
+    {
+      amount:      Number(amount),
+      method,
+      referenceId,
+      paymentDate,
+      notes,
+    }
+  );
+
+  res.status(201).json({
+    success: true,
+    message: 'Payment recorded',
+    data:    result,
+  });
+});
+
+// ─── Ledger ───────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/properties/:propertyId/rents/tenants/:tenantId/ledger
+ *
+ * Returns the full LedgerEntry timeline for a tenant (newest first)
+ * plus the current balance.
+ */
+const getTenantLedger = asyncHandler(async (req, res) => {
+  const property = await verifyOwnership(req.params.propertyId, req.user._id);
+  if (!property) {
+    return res.status(404).json({ success: false, message: 'Property not found' });
+  }
+
+  const { from, to, type: referenceType, q, page, limit } = req.query;
+
+  const result = await rentService.getTenantLedger(req.params.tenantId, {
+    from,
+    to,
+    referenceType,
+    q,
+    page:  Number(page)  || 1,
+    limit: Math.min(Number(limit) || 50, 100),
+  });
+
+  res.json({ success: true, data: result });
+});
+
+/**
+ * POST /api/properties/:propertyId/rents/tenants/:tenantId/charge
+ * Body: { amount, description, chargeDate? }
+ *
+ * Records a manual debit (damage, extra charge, etc.) against a tenant.
+ * Creates a LedgerEntry of type 'debit' / referenceType 'adjustment'.
+ */
+const addManualCharge = asyncHandler(async (req, res) => {
+  const property = await verifyOwnership(req.params.propertyId, req.user._id);
+  if (!property) {
+    return res.status(404).json({ success: false, message: 'Property not found' });
+  }
+
+  const { amount, description, chargeDate } = req.body;
+
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+    return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+  }
+
+  const result = await rentService.addManualCharge(
+    req.params.propertyId,
+    req.params.tenantId,
+    { amount: Number(amount), description, chargeDate }
+  );
+
+  res.status(201).json({ success: true, message: 'Charge recorded', data: result });
+});
+
+// ─── Legacy pay ───────────────────────────────────────────────────────────────
 
 // PATCH /api/properties/:propertyId/rents/:id/pay
-// Body: { paymentDate?, paymentMethod?, notes? }
+// Body: { paymentDate?, paymentMethod?, notes?, paidAmount? }
+// NOTE: Prefer POST /rents/payments for full financial tracking.
+//       This endpoint remains for backward compatibility.
 const markRentAsPaid = asyncHandler(async (req, res) => {
   const property = await verifyOwnership(req.params.propertyId, req.user._id);
   if (!property) {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
 
-  // Confirm this rent belongs to this property
   const existing = await RentPayment.findOne({
-    _id: req.params.id,
+    _id:      req.params.id,
     property: req.params.propertyId,
   });
   if (!existing) {
@@ -144,5 +247,8 @@ module.exports = {
   getPendingRents,
   getOverdueRents,
   getTenantRentHistory,
+  recordPayment,
+  getTenantLedger,
+  addManualCharge,
   markRentAsPaid,
 };

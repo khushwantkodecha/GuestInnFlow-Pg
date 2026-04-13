@@ -13,11 +13,17 @@ const reserveBedSchema = z.object({
   reservedTill: z.string()
     .refine(v => !isNaN(Date.parse(v)), { message: 'reservedTill must be a valid date' })
     .refine(v => new Date(v) > new Date(), { message: 'reservedTill must be in the future' }),
-  name:  z.string().min(1, 'Name is required').max(100).trim(),
-  phone: z.string().min(5, 'Phone is required').max(20).trim(),
+  // Either link an existing tenant by ID, or supply name + phone to create a lead
+  tenantId: z.string().regex(objectIdRegex, { message: 'Invalid tenantId' }).optional(),
+  name:     z.string().min(1).max(100).trim().optional(),
+  phone:    z.string().min(5).max(20).trim().optional(),
   moveInDate: z.string().refine(v => !isNaN(Date.parse(v)), { message: 'Invalid moveInDate' }).optional(),
-  notes: z.string().max(500).trim().optional(),
-})
+  notes:    z.string().max(500).trim().optional(),
+  replace:  z.boolean().optional(),
+}).refine(
+  data => !!(data.tenantId || (data.name && data.phone)),
+  { message: 'Provide either tenantId or both name and phone' }
+)
 
 const extraBedSchema = z.object({
   isChargeable: z.boolean().default(true),

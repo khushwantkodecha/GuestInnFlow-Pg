@@ -14,14 +14,18 @@ const reportRoutes = require('./routes/reportRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const searchRoutes      = require('./routes/searchRoutes');
 const accountingRoutes  = require('./routes/accountingRoutes');
-const { startReservationCron }       = require('./services/reservationCron');
-const { startRecurringExpenseCron }  = require('./services/recurringExpenseCron');
+const invoiceRoutes     = require('./routes/invoiceRoutes');
+const reminderRoutes    = require('./routes/reminderRoutes');
+const { startReservationCron }      = require('./services/reservationCron');
+const { startRecurringExpenseCron } = require('./services/recurringExpenseCron');
+const { startReminderScheduler }    = require('./services/reminderScheduler');
 
 connectDB();
 
 // Start background jobs
 startReservationCron();
 startRecurringExpenseCron();
+startReminderScheduler();
 
 const rateLimit = require('express-rate-limit');
 
@@ -68,6 +72,8 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/search',   searchRoutes);
 app.use('/api/properties/:propertyId/accounting', accountingRoutes);
+app.use('/api/properties/:propertyId/invoices',   invoiceRoutes);
+app.use('/api/properties/:propertyId/reminders',  reminderRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ success: false, message: 'Route not found' }));

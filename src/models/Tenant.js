@@ -63,7 +63,7 @@ const tenantSchema = new mongoose.Schema(
     },
     checkInDate: {
       type: Date,
-      required: [true, 'Check-in date is required'],
+      default: null,   // set during bed assignment; null for 'lead' tenants
     },
     checkOutDate: {
       type: Date,
@@ -71,7 +71,7 @@ const tenantSchema = new mongoose.Schema(
     },
     rentAmount: {
       type: Number,
-      required: [true, 'Rent amount is required'],
+      default: 0,      // set during bed assignment; 0 for 'lead' tenants
       min: 0,
     },
     dueDate: {
@@ -90,28 +90,58 @@ const tenantSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    // Immutable billing snapshot — captured at assignment, never updated after.
-    // IMPORTANT: Do NOT modify this after assignment. It is a permanent audit trail.
-    billingSnapshot: {
-      baseRent:         { type: Number },
-      rentType:         { type: String, enum: ['per_bed', 'per_room'] },
-      roomCapacity:     { type: Number },
-      occupiedAtAssign: { type: Number },
-      divisorUsed:      { type: Number },
-      isEarlyOccupant:  { type: Boolean },       // true when first tenant in per_room
-      overrideApplied:  { type: Boolean },
-      overrideSource:   { type: String, enum: ['bed', 'request', null] },
-      isExtra:          { type: Boolean },
-      isChargeable:     { type: Boolean },
-      extraCharge:      { type: Number },
-      finalRent:        { type: Number },
-      traceId:          { type: String },         // UUID for production log correlation
-      assignedAt:       { type: Date },
+    depositBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
+    depositStatus: {
+      type: String,
+      enum: ['held', 'adjusted', 'refunded', null],
+      default: null,
+    },
+    // Billing snapshot — updated on every rent recalculation event
+    // (assign, vacate, change-room, extra bed add/remove).
+    // finalRent mirrors rentAmount; other fields provide calculation context.
+    billingSnapshot: {
+      baseRent:        { type: Number },
+      rentType:        { type: String, enum: ['per_bed', 'per_room'] },
+      roomCapacity:    { type: Number },
+      divisorUsed:     { type: Number },   // normalOccupied at the time of last recalc
+      overrideApplied: { type: Boolean },
+      overrideSource:  { type: String, enum: ['bed', 'request', null] },
+      isExtra:         { type: Boolean },
+      isChargeable:    { type: Boolean },
+      extraCharge:     { type: Number },
+      finalRent:       { type: Number },
+      traceId:         { type: String },   // UUID linking log lines to this recalc event
+      assignedAt:      { type: Date },
+    },
+    // Append-only rent history — one entry written on every recalculation.
+    // Each entry records the full before/after state so any point in time can
+    // be reconstructed without scanning the whole collection.
+    rentHistory: [
+      {
+        oldRent:     { type: Number },            // rentAmount BEFORE this recalc
+        newRent:     { type: Number, required: true }, // rentAmount AFTER (= persisted rentAmount)
+        source:      { type: String },            // engine token: 'per_bed' | 'per_room_split' | 'override' | 'extra_*'
+        divisorUsed: { type: Number },            // null for per_bed / extra beds
+        reason:      { type: String },            // 'assign' | 'vacate' | 'change_room' | 'extra_bed_change'
+                                                  // | 'base_rent_update' | 'rent_type_update'
+        traceId:     { type: String },            // UUID linking log lines to this recalc event
+        changedAt:   { type: Date, default: Date.now },
+      },
+    ],
     status: {
       type: String,
-      enum: ['active', 'vacated', 'notice'],
+      enum: ['active', 'vacated', 'notice', 'merged', 'lead'],
       default: 'active',
+    },
+    // Set when this tenant record was absorbed into another via the merge flow.
+    mergedInto: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tenant',
+      default: null,
     },
     // ── Vacate metadata ──────────────────────────────────────────────────────
     vacateNotes: {
@@ -123,9 +153,33 @@ const tenantSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // ── Financial ledger cache ───────────────────────────────────────────────
+    // Mirrors the last LedgerEntry.balanceAfter for this tenant.
+    // Positive = tenant still owes. Negative = tenant has advance credit.
+    // Updated by allocatePayment and generateRentForProperty in rentService.
+    // Source of truth is LedgerEntry; this is a read-optimised snapshot.
+    ledgerBalance: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
+
+// Unique identity: one active tenant per phone per property.
+tenantSchema.index(
+  { property: 1, phone: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['active', 'notice', 'lead'] } },
+    name: 'unique_active_phone_per_property',
+  }
+);
+
+// Compound indexes for efficient property-scoped search and sorting
+tenantSchema.index({ property: 1, name:      1 }, { name: 'prop_name' });
+tenantSchema.index({ property: 1, status:    1 }, { name: 'prop_status' });
+tenantSchema.index({ property: 1, updatedAt: -1 }, { name: 'prop_recent' });
 
 // ── Profile completion ───────────────────────────────────────────────────────
 // A profile is complete when all 6 criteria are satisfied.

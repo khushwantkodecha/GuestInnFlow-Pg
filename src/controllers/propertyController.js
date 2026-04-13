@@ -49,23 +49,25 @@ const writeAuditLog = (propertyId, userId, action, changes) => {
 const buildStatsForProperties = async (propertyIds) => {
   if (!propertyIds.length) return {};
 
-  // Bridge: rooms per property (Bed has no property ref)
+  // Bridge: rooms per property (Bed has no property ref — needs roomIds)
   const allRooms = await Room.find(
     { property: { $in: propertyIds }, isActive: true },
-    '_id property baseRent'
+    '_id property'
   ).lean();
 
-  const roomIds = allRooms.map((r) => r._id);
+  const roomIds   = allRooms.map((r) => r._id);
+  const roomCount = {};
+  for (const r of allRooms) {
+    const pid = String(r.property);
+    roomCount[pid] = (roomCount[pid] ?? 0) + 1;
+  }
 
   // Run all aggregations in parallel
-  const [bedsByStatus, tenantCounts] = await Promise.all([
+  const [bedsByStatus, tenantCounts, revenueAgg] = await Promise.all([
+    // Bed counts grouped by property + status
     Bed.aggregate([
       { $match: { room: { $in: roomIds }, isActive: true } },
-      {
-        $lookup: {
-          from: 'rooms', localField: 'room', foreignField: '_id', as: 'roomDoc',
-        },
-      },
+      { $lookup: { from: 'rooms', localField: 'room', foreignField: '_id', as: 'roomDoc' } },
       { $unwind: '$roomDoc' },
       {
         $group: {
@@ -74,24 +76,46 @@ const buildStatsForProperties = async (propertyIds) => {
         },
       },
     ]),
+    // Active + notice tenant head-count per property
     Tenant.aggregate([
       { $match: { property: { $in: propertyIds }, status: { $in: ['active', 'notice'] } } },
       { $group: { _id: '$property', count: { $sum: 1 } } },
     ]),
+    // Revenue = SUM(tenant.rentAmount) for active tenants only.
+    // billingSnapshot.isExtra flags extra-bed tenants for the breakdown.
+    // Fallback to billingSnapshot.finalRent if rentAmount is somehow missing.
+    Tenant.aggregate([
+      { $match: { property: { $in: propertyIds }, status: 'active' } },
+      {
+        $group: {
+          _id: '$property',
+          totalRevenue: {
+            $sum: { $ifNull: ['$rentAmount', { $ifNull: ['$billingSnapshot.finalRent', 0] }] },
+          },
+          extraRevenue: {
+            $sum: {
+              $cond: [
+                { $eq: ['$billingSnapshot.isExtra', true] },
+                { $ifNull: ['$rentAmount', { $ifNull: ['$billingSnapshot.finalRent', 0] }] },
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]),
   ]);
 
   // Build per-property stat maps
-  const bedMap    = {};   // propertyId → { vacant, occupied, reserved, total }
-  const tenantMap = {};   // propertyId → count
-  const rentMap   = {};   // propertyId → totalRent (sum of room rents)
-  const roomCount = {};   // propertyId → count
+  const bedMap     = {};
+  const tenantMap  = {};
+  const revenueMap = {};
 
   for (const p of propertyIds) {
     const pid = String(p);
-    bedMap[pid]    = { vacant: 0, occupied: 0, reserved: 0, total: 0 };
-    tenantMap[pid] = 0;
-    rentMap[pid]   = 0;
-    roomCount[pid] = 0;
+    bedMap[pid]     = { vacant: 0, occupied: 0, reserved: 0, total: 0 };
+    tenantMap[pid]  = 0;
+    revenueMap[pid] = { totalRevenue: 0, extraRevenue: 0 };
   }
 
   for (const b of bedsByStatus) {
@@ -107,24 +131,30 @@ const buildStatsForProperties = async (propertyIds) => {
     if (tenantMap[pid] !== undefined) tenantMap[pid] = t.count;
   }
 
-  for (const r of allRooms) {
-    const pid = String(r.property);
-    rentMap[pid]   = (rentMap[pid]   ?? 0) + (r.baseRent ?? 0);
-    roomCount[pid] = (roomCount[pid] ?? 0) + 1;
+  for (const r of revenueAgg) {
+    const pid = String(r._id);
+    if (revenueMap[pid]) {
+      revenueMap[pid].totalRevenue = r.totalRevenue ?? 0;
+      revenueMap[pid].extraRevenue = r.extraRevenue ?? 0;
+    }
   }
 
   const result = {};
   for (const p of propertyIds) {
-    const pid = String(p);
+    const pid  = String(p);
     const beds = bedMap[pid];
+    const rev  = revenueMap[pid];
     result[pid] = {
-      totalRooms:     roomCount[pid],
+      totalRooms:     roomCount[pid] ?? 0,
       totalBeds:      beds.total,
       occupiedBeds:   beds.occupied,
       vacantBeds:     beds.vacant,
       reservedBeds:   beds.reserved,
       activeTenants:  tenantMap[pid],
-      totalRent:      rentMap[pid],
+      // Revenue fields — always sourced from tenant.rentAmount, never from room.baseRent
+      totalRevenue:   rev.totalRevenue,
+      normalRevenue:  rev.totalRevenue - rev.extraRevenue,
+      extraRevenue:   rev.extraRevenue,
       occupancyRate:  beds.total > 0 ? Math.round((beds.occupied / beds.total) * 100) : 0,
     };
   }

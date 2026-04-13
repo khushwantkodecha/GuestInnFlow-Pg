@@ -3,9 +3,10 @@ import {
   CheckCircle2, Zap, AlertTriangle, Clock, TrendingUp,
   CircleDollarSign, MessageCircle, Copy, Check,
   Search, X, RotateCcw, BedDouble, IndianRupee,
-  Calendar, ChevronRight, Download,
+  Calendar, ChevronRight, Download, ArrowDownCircle,
+  ArrowUpCircle, Wallet, CreditCard,
 } from 'lucide-react'
-import { getRents, generateRent, markRentPaid, sendRentReminder } from '../api/rent'
+import { getRents, generateRent, recordPayment, getTenantLedger, sendRentReminder } from '../api/rent'
 import { getTenantRents } from '../api/tenants'
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
@@ -18,6 +19,7 @@ import Drawer from '../components/ui/Drawer'
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt   = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
 const fdate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'
+const fdateTime = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
 const daysOverdue = (dueDate) => Math.max(0, Math.floor((Date.now() - new Date(dueDate)) / 86400000))
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => ({
@@ -33,6 +35,7 @@ const StatusPill = ({ status }) => {
   const cfg = {
     paid:    'bg-emerald-50 text-emerald-700 border border-emerald-200',
     pending: 'bg-amber-50 text-amber-700 border border-amber-200',
+    partial: 'bg-orange-50 text-orange-700 border border-orange-200',
     overdue: 'bg-red-50 text-red-700 border border-red-200',
   }
   return (
@@ -40,6 +43,7 @@ const StatusPill = ({ status }) => {
       {status === 'overdue' && <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />}
       {status === 'paid'    && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
       {status === 'pending' && <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />}
+      {status === 'partial' && <span className="h-1.5 w-1.5 rounded-full bg-orange-400" />}
       {status}
     </span>
   )
@@ -97,8 +101,7 @@ const SummaryCards = ({ rents, statusFilter, onFilter }) => {
         <button key={key} onClick={() => onFilter(key)}
           className={`card p-4 text-left transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98]
             ${statusFilter === key ? 'ring-2 ring-primary-400 border-primary-300' : ''}
-            ${highlight ? 'border-red-200 bg-red-50/50' : ''}
-          `}
+            ${highlight ? 'border-red-200 bg-red-50/50' : ''}`}
         >
           <div className="flex items-center gap-2 mb-2">
             <div className={`rounded-lg p-1.5 ${iconBg}`}><Icon size={14} className={iconColor} /></div>
@@ -133,13 +136,15 @@ const BulkBar = ({ count, onRemind, onExport, onClear }) => (
 )
 
 // ── Rent Row ──────────────────────────────────────────────────────────────────
-const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onRemind, onLedger, reminding }) => {
+const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onRemind, onLedger, reminding, reminded }) => {
   const isOverdue  = r.status === 'overdue'
   const isPending  = r.status === 'pending'
   const days       = isOverdue ? daysOverdue(r.dueDate) : 0
   const bed        = r.tenant?.bed
   const roomNum    = bed?.room?.roomNumber
   const bedNum     = bed?.bedNumber
+  const balance    = r.tenant?.ledgerBalance ?? null
+  const wasReminded = reminded && r.tenant?._id && reminded.has(r.tenant._id)
 
   return (
     <tr className={`group transition-colors cursor-pointer
@@ -162,6 +167,16 @@ const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onRemind, onLedger, 
         </p>
         {r.tenant?.phone && (
           <p className="text-xs text-slate-400 mt-0.5">{r.tenant.phone}</p>
+        )}
+        {balance !== null && balance < 0 && (
+          <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">
+            {fmt(Math.abs(balance))} advance credit
+          </p>
+        )}
+        {wasReminded && (
+          <span className="inline-flex items-center gap-1 mt-1 rounded-full bg-green-50 border border-green-200 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">
+            <MessageCircle size={9} /> Reminder Sent
+          </span>
         )}
       </td>
 
@@ -253,70 +268,155 @@ const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onRemind, onLedger, 
   )
 }
 
-// ── Mark Paid Modal ───────────────────────────────────────────────────────────
-const MarkPaidModal = ({ rent, onConfirm, onClose, paying }) => {
-  const balance = rent.amount - (rent.paidAmount ?? 0)
+// ── Allocation Preview (pure computation, no side effects) ────────────────────
+const computeAllocation = (openRents, payingAmount) => {
+  let remaining = payingAmount
+  const rows = []
+
+  for (const r of openRents) {
+    if (remaining <= 0) {
+      rows.push({ rent: r, applying: 0, covered: false })
+      continue
+    }
+    const due      = r.amount - (r.paidAmount ?? 0)
+    const applying = Math.min(due, remaining)
+    remaining -= applying
+    rows.push({ rent: r, applying, covered: applying >= due })
+  }
+
+  return { rows, advanceAmount: remaining }
+}
+
+// ── Payment Modal (allocation-preview, multi-record) ─────────────────────────
+const PaymentModal = ({ tenant, openRents, currentBalance, onConfirm, onClose, paying }) => {
+  const totalDue = openRents.reduce((s, r) => s + (r.amount - (r.paidAmount ?? 0)), 0)
+
   const [form, setForm] = useState({
-    paidAmount: String(balance),
-    paymentMethod: 'cash',
+    amount:      String(Math.max(0, totalDue)),
+    method:      'cash',
+    referenceId: '',
     paymentDate: new Date().toISOString().split('T')[0],
-    notes: '',
+    notes:       '',
   })
-  const paying_ = Number(form.paidAmount) || 0
-  const isPartial = paying_ < balance && paying_ > 0
+
+  const payingAmt = Math.max(0, Number(form.amount) || 0)
+  const { rows, advanceAmount } = computeAllocation(openRents, payingAmt)
+  const isAdvance = advanceAmount > 0 && payingAmt > 0
+  const isPartial = payingAmt < totalDue && payingAmt > 0
 
   const METHODS = ['cash', 'upi', 'bank_transfer', 'cheque', 'other']
 
   return (
     <Modal title="Collect Payment" onClose={onClose}>
-      {/* Tenant info */}
-      <div className={`mb-5 rounded-xl px-4 py-4 ${rent.status === 'overdue' ? 'bg-red-50 border border-red-200' : 'bg-slate-50 border border-slate-100'}`}>
+      {/* Tenant header */}
+      <div className="mb-5 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
         <div className="flex items-start justify-between">
           <div>
-            <p className="font-semibold text-slate-800">{rent.tenant?.name}</p>
-            <p className="text-xs text-slate-500 mt-0.5">{rent.tenant?.phone}</p>
+            <p className="font-semibold text-slate-800">{tenant?.name}</p>
+            <p className="text-xs text-slate-400 mt-0.5">{tenant?.phone}</p>
           </div>
           <div className="text-right">
-            <p className="text-lg font-bold text-slate-800 tabular-nums">{fmt(rent.amount)}</p>
-            {(rent.paidAmount ?? 0) > 0 && (
-              <p className="text-xs text-amber-600 font-medium">{fmt(rent.paidAmount)} already paid</p>
+            {currentBalance < 0 ? (
+              <div className="flex items-center gap-1.5 justify-end text-emerald-600">
+                <Wallet size={13} />
+                <p className="text-sm font-bold tabular-nums">{fmt(Math.abs(currentBalance))} advance</p>
+              </div>
+            ) : (
+              <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(totalDue)} due</p>
             )}
-            <StatusPill status={rent.status} />
+            {openRents.length > 0 && (
+              <p className="text-xs text-slate-400 mt-0.5">{openRents.length} open record{openRents.length !== 1 ? 's' : ''}</p>
+            )}
           </div>
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
-          <Calendar size={11} />
-          Due: {fdate(rent.dueDate)}
-          {rent.status === 'overdue' && (
-            <span className="text-red-600 font-semibold">· {daysOverdue(rent.dueDate)} days overdue</span>
-          )}
         </div>
       </div>
 
-      <form onSubmit={e => { e.preventDefault(); onConfirm({ ...form, paidAmount: paying_ }) }} className="space-y-4">
+      <form onSubmit={e => { e.preventDefault(); onConfirm({ ...form, amount: payingAmt }) }} className="space-y-4">
+
         {/* Amount */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="label mb-0">Amount (₹)</label>
-            <span className="text-xs text-slate-400">Balance: {fmt(balance)}</span>
+            {totalDue > 0 && (
+              <button type="button" className="text-xs text-primary-500 hover:underline"
+                onClick={() => setForm(f => ({ ...f, amount: String(totalDue) }))}>
+                Fill full balance
+              </button>
+            )}
           </div>
-          <input type="number" min="1" max={balance} step="1" className="input"
-            value={form.paidAmount} onChange={e => setForm(f => ({ ...f, paidAmount: e.target.value }))} required />
+          <input type="number" min="1" step="1" className="input"
+            value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} required />
           {isPartial && (
             <p className="mt-1 text-xs text-amber-600 font-medium">
-              Partial payment — {fmt(balance - paying_)} will remain pending
+              Partial — {fmt(totalDue - payingAmt)} will remain pending
+            </p>
+          )}
+          {isAdvance && (
+            <p className="mt-1 text-xs text-emerald-600 font-medium flex items-center gap-1">
+              <Wallet size={11} /> {fmt(advanceAmount)} will go toward advance credit
             </p>
           )}
         </div>
+
+        {/* Allocation Preview */}
+        {openRents.length > 0 && payingAmt > 0 && (
+          <div>
+            <p className="label mb-1.5">Allocation Preview</p>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 overflow-hidden divide-y divide-slate-100">
+              {rows.map(({ rent: r, applying, covered }) => {
+                const due = r.amount - (r.paidAmount ?? 0)
+                return (
+                  <div key={r._id} className={`flex items-center justify-between px-3 py-2.5 ${applying > 0 ? '' : 'opacity-40'}`}>
+                    <div>
+                      <p className="text-xs font-medium text-slate-700">
+                        {MONTH_SHORT[r.month - 1]} {r.year}
+                        {r.status === 'overdue' && (
+                          <span className="ml-1.5 text-[10px] font-semibold text-red-500 uppercase">overdue</span>
+                        )}
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {(r.paidAmount ?? 0) > 0
+                          ? `${fmt(r.paidAmount)} already paid · ${fmt(due)} remaining`
+                          : `${fmt(r.amount)} due`
+                        }
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      {applying > 0 ? (
+                        <>
+                          <p className="text-xs font-bold text-emerald-600 tabular-nums">−{fmt(applying)}</p>
+                          {covered
+                            ? <p className="text-[10px] text-emerald-500 font-medium">Fully settled</p>
+                            : <p className="text-[10px] text-amber-500 font-medium">{fmt(due - applying)} remains</p>
+                          }
+                        </>
+                      ) : (
+                        <p className="text-xs text-slate-300">Not covered</p>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+              {isAdvance && (
+                <div className="flex items-center justify-between px-3 py-2.5 bg-emerald-50">
+                  <p className="text-xs font-medium text-emerald-700 flex items-center gap-1">
+                    <Wallet size={11} /> Advance credit
+                  </p>
+                  <p className="text-xs font-bold text-emerald-600 tabular-nums">+{fmt(advanceAmount)}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Payment Method */}
         <div>
           <label className="label">Payment Method</label>
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
             {METHODS.map(m => (
-              <button key={m} type="button" onClick={() => setForm(f => ({ ...f, paymentMethod: m }))}
+              <button key={m} type="button" onClick={() => setForm(f => ({ ...f, method: m }))}
                 className={`rounded-xl border px-2 py-2 text-xs font-medium capitalize transition-colors ${
-                  form.paymentMethod === m
+                  form.method === m
                     ? 'border-primary-400 bg-primary-50 text-primary-600'
                     : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}>
@@ -325,6 +425,17 @@ const MarkPaidModal = ({ rent, onConfirm, onClose, paying }) => {
             ))}
           </div>
         </div>
+
+        {/* Reference ID (UPI/cheque) */}
+        {(form.method === 'upi' || form.method === 'bank_transfer' || form.method === 'cheque') && (
+          <div>
+            <label className="label">
+              {form.method === 'cheque' ? 'Cheque No.' : 'Reference / UTR'}
+            </label>
+            <input className="input" placeholder={form.method === 'cheque' ? 'e.g. 002341' : 'e.g. 123456789012'}
+              value={form.referenceId} onChange={e => setForm(f => ({ ...f, referenceId: e.target.value }))} />
+          </div>
+        )}
 
         {/* Date */}
         <div>
@@ -336,15 +447,25 @@ const MarkPaidModal = ({ rent, onConfirm, onClose, paying }) => {
         {/* Notes */}
         <div>
           <label className="label">Notes (optional)</label>
-          <input className="input" placeholder="e.g. UPI ref #1234"
+          <input className="input" placeholder="Additional notes…"
             value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
         </div>
 
+        {/* Confirmation message indicator */}
+        {tenant?.phone && payingAmt > 0 && (
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+            <CheckCircle2 size={12} className="shrink-0 text-emerald-500" />
+            <p className="text-xs text-emerald-700 font-medium">
+              WhatsApp confirmation will be sent to {tenant.phone}
+            </p>
+          </div>
+        )}
+
         <div className="flex gap-2 pt-1 border-t border-slate-100">
           <button type="button" className="btn-secondary flex-1" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary flex-1" disabled={paying}>
+          <button type="submit" className="btn-primary flex-1" disabled={paying || payingAmt <= 0}>
             <CircleDollarSign size={14} />
-            {paying ? 'Saving…' : isPartial ? 'Record Partial' : 'Confirm Payment'}
+            {paying ? 'Saving…' : isPartial ? 'Record Partial' : isAdvance ? 'Record + Advance' : 'Confirm Payment'}
           </button>
         </div>
       </form>
@@ -354,14 +475,26 @@ const MarkPaidModal = ({ rent, onConfirm, onClose, paying }) => {
 
 // ── Tenant Ledger Drawer ──────────────────────────────────────────────────────
 const TenantLedger = ({ tenant, propertyId }) => {
-  const { data, loading } = useApi(
+  const [view, setView] = useState('ledger') // 'ledger' | 'records'
+
+  // Ledger entries (new financial layer)
+  const { data: ledgerData, loading: ledgerLoading } = useApi(
+    () => getTenantLedger(propertyId, tenant._id),
+    [tenant._id]
+  )
+  const { entries = [], currentBalance = 0 } = ledgerData?.data ?? {}
+
+  // Legacy rent records (per-period)
+  const { data: rentData, loading: rentLoading } = useApi(
     () => getTenantRents(propertyId, tenant._id),
     [tenant._id]
   )
-  const rents = data?.data ?? []
+  const rents = rentData?.data ?? []
+
   const totalBilled  = rents.reduce((s, r) => s + r.amount, 0)
   const totalPaid    = rents.reduce((s, r) => r.status === 'paid' ? s + r.amount : s + (r.paidAmount ?? 0), 0)
-  const totalPending = totalBilled - totalPaid
+
+  const hasAdvance = currentBalance < 0
 
   return (
     <div className="flex flex-col h-full">
@@ -369,56 +502,158 @@ const TenantLedger = ({ tenant, propertyId }) => {
       <div className="px-6 py-5 bg-slate-50 border-b border-slate-100">
         <p className="text-base font-bold text-slate-800">{tenant.name}</p>
         <p className="text-xs text-slate-400 mt-0.5">{tenant.phone}</p>
-        <div className="grid grid-cols-3 gap-2 mt-4">
-          {[
-            { label: 'Total Billed', value: fmt(totalBilled), color: 'text-slate-700' },
-            { label: 'Total Paid',   value: fmt(totalPaid),   color: 'text-emerald-600' },
-            { label: 'Pending',      value: fmt(totalPending), color: totalPending > 0 ? 'text-amber-600' : 'text-slate-400' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="rounded-xl bg-white border border-slate-100 px-3 py-2.5 text-center">
-              <p className="text-[10px] text-slate-400 font-medium">{label}</p>
-              <p className={`text-sm font-bold mt-0.5 tabular-nums ${color}`}>{value}</p>
+
+        {/* Balance block */}
+        <div className={`mt-4 rounded-xl px-4 py-3 flex items-center justify-between ${
+          hasAdvance
+            ? 'bg-emerald-50 border border-emerald-200'
+            : currentBalance > 0
+            ? 'bg-amber-50 border border-amber-200'
+            : 'bg-slate-100 border border-slate-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            {hasAdvance
+              ? <Wallet size={15} className="text-emerald-600" />
+              : <IndianRupee size={15} className={currentBalance > 0 ? 'text-amber-600' : 'text-slate-400'} />
+            }
+            <div>
+              <p className={`text-xs font-medium ${hasAdvance ? 'text-emerald-600' : currentBalance > 0 ? 'text-amber-600' : 'text-slate-500'}`}>
+                {hasAdvance ? 'Advance Credit' : currentBalance > 0 ? 'Outstanding Balance' : 'Fully Settled'}
+              </p>
+              <p className={`text-lg font-bold tabular-nums ${hasAdvance ? 'text-emerald-700' : currentBalance > 0 ? 'text-amber-700' : 'text-slate-500'}`}>
+                {fmt(Math.abs(currentBalance))}
+              </p>
             </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-right">
+            <div>
+              <p className="text-[10px] text-slate-400">Billed</p>
+              <p className="text-xs font-bold text-slate-700 tabular-nums">{fmt(totalBilled)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-400">Paid</p>
+              <p className="text-xs font-bold text-emerald-600 tabular-nums">{fmt(totalPaid)}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* View toggle */}
+        <div className="mt-3 flex rounded-xl border border-slate-200 bg-white p-1 gap-1">
+          {[
+            { key: 'ledger',  label: 'Ledger Timeline' },
+            { key: 'records', label: 'Rent Records'    },
+          ].map(({ key, label }) => (
+            <button key={key} onClick={() => setView(key)}
+              className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-colors ${
+                view === key ? 'bg-primary-500 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+              }`}>
+              {label}
+            </button>
           ))}
         </div>
       </div>
 
-      {/* Records */}
+      {/* Body */}
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        {loading ? (
-          <div className="flex justify-center py-10">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-100 border-t-primary-500" />
-          </div>
-        ) : rents.length === 0 ? (
-          <p className="text-sm text-slate-400 text-center py-10">No rent records yet</p>
-        ) : (
-          <div className="space-y-2">
-            {rents.map(r => (
-              <div key={r._id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white px-4 py-3 hover:border-slate-200 transition-colors">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700">
-                    {MONTH_SHORT[r.month - 1]} {r.year}
-                  </p>
-                  {r.status === 'paid' && r.paymentDate && (
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Paid {fdate(r.paymentDate)}
-                      {r.paymentMethod && ` · ${r.paymentMethod.replace('_', ' ')}`}
-                    </p>
-                  )}
-                  {r.status !== 'paid' && (
-                    <p className="text-xs text-slate-400 mt-0.5">Due {fdate(r.dueDate)}</p>
-                  )}
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(r.amount)}</p>
-                  {(r.paidAmount ?? 0) > 0 && r.status !== 'paid' && (
-                    <p className="text-xs text-amber-600 font-medium">{fmt(r.paidAmount)} paid</p>
-                  )}
-                  <StatusPill status={r.status} />
-                </div>
+
+        {/* ── Ledger Timeline ── */}
+        {view === 'ledger' && (
+          ledgerLoading ? (
+            <div className="flex justify-center py-10">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-100 border-t-primary-500" />
+            </div>
+          ) : entries.length === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-10">No ledger entries yet</p>
+          ) : (
+            <div className="relative">
+              {/* Vertical line */}
+              <div className="absolute left-[18px] top-0 bottom-0 w-px bg-slate-100" />
+              <div className="space-y-4 relative">
+                {entries.map((e, idx) => {
+                  const isDebit  = e.type === 'debit'
+                  const isFirst  = idx === 0
+                  const balNeg   = e.balanceAfter < 0
+
+                  return (
+                    <div key={e._id ?? idx} className="flex gap-3 items-start">
+                      {/* Icon dot */}
+                      <div className={`mt-0.5 shrink-0 h-9 w-9 rounded-full flex items-center justify-center border-2 bg-white z-10 ${
+                        isDebit
+                          ? 'border-amber-200 text-amber-500'
+                          : 'border-emerald-200 text-emerald-500'
+                      }`}>
+                        {isDebit
+                          ? <ArrowDownCircle size={14} />
+                          : <ArrowUpCircle  size={14} />
+                        }
+                      </div>
+
+                      {/* Card */}
+                      <div className={`flex-1 rounded-xl border px-3.5 py-3 ${
+                        isFirst ? 'bg-white shadow-sm border-slate-200' : 'bg-white border-slate-100'
+                      }`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-semibold text-slate-700 leading-tight">
+                              {e.description ?? (isDebit ? 'Rent charged' : 'Payment received')}
+                            </p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">{fdateTime(e.createdAt)}</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className={`text-sm font-bold tabular-nums ${isDebit ? 'text-red-600' : 'text-emerald-600'}`}>
+                              {isDebit ? '+' : '−'}{fmt(e.amount)}
+                            </p>
+                            <p className={`text-[10px] font-medium mt-0.5 tabular-nums ${balNeg ? 'text-emerald-500' : e.balanceAfter > 0 ? 'text-amber-500' : 'text-slate-400'}`}>
+                              {balNeg ? `${fmt(Math.abs(e.balanceAfter))} credit` : `${fmt(e.balanceAfter)} due`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
-            ))}
-          </div>
+            </div>
+          )
+        )}
+
+        {/* ── Rent Records ── */}
+        {view === 'records' && (
+          rentLoading ? (
+            <div className="flex justify-center py-10">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-100 border-t-primary-500" />
+            </div>
+          ) : rents.length === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-10">No rent records yet</p>
+          ) : (
+            <div className="space-y-2">
+              {rents.map(r => (
+                <div key={r._id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white px-4 py-3 hover:border-slate-200 transition-colors">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">
+                      {MONTH_SHORT[r.month - 1]} {r.year}
+                    </p>
+                    {r.status === 'paid' && r.paymentDate && (
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Paid {fdate(r.paymentDate)}
+                        {r.paymentMethod && ` · ${r.paymentMethod.replace('_', ' ')}`}
+                      </p>
+                    )}
+                    {r.status !== 'paid' && (
+                      <p className="text-xs text-slate-400 mt-0.5">Due {fdate(r.dueDate)}</p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(r.amount)}</p>
+                    {(r.paidAmount ?? 0) > 0 && r.status !== 'paid' && (
+                      <p className="text-xs text-amber-600 font-medium">{fmt(r.paidAmount)} paid</p>
+                    )}
+                    <StatusPill status={r.status} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
         )}
       </div>
     </div>
@@ -474,17 +709,20 @@ const Rent = () => {
   const propertyId = selectedProperty?._id ?? ''
   const toast = useToast()
 
-  const [month,         setMonth]         = useState(now.getMonth() + 1)
-  const [year,          setYear]          = useState(now.getFullYear())
-  const [statusFilter,  setStatusFilter]  = useState('all')
-  const [search,        setSearch]        = useState('')
-  const [generating,    setGenerating]    = useState(false)
-  const [payModal,      setPayModal]      = useState(null)
-  const [paying,        setPaying]        = useState(false)
-  const [remindingId,   setRemindingId]   = useState(null)
-  const [reminderModal, setReminderModal] = useState(null)
-  const [selected,      setSelected]      = useState(new Set())
-  const [ledgerTenant,  setLedgerTenant]  = useState(null)
+  const [month,          setMonth]          = useState(now.getMonth() + 1)
+  const [year,           setYear]           = useState(now.getFullYear())
+  const [statusFilter,   setStatusFilter]   = useState('all')
+  const [search,         setSearch]         = useState('')
+  const [generating,     setGenerating]     = useState(false)
+  const [paying,         setPaying]         = useState(false)
+  const [remindingId,    setRemindingId]    = useState(null)
+  const [reminderModal,  setReminderModal]  = useState(null)
+  const [reminded,       setReminded]       = useState(new Set()) // tenantIds reminded this session
+  const [selected,       setSelected]       = useState(new Set())
+  const [ledgerTenant,   setLedgerTenant]   = useState(null)
+
+  // Payment modal state: { tenant, openRents, currentBalance }
+  const [payModal, setPayModal] = useState(null)
 
   // Fetch all rents for the selected period (no status filter — client-side)
   const { data, loading, refetch } = useApi(
@@ -540,10 +778,40 @@ const Rent = () => {
     }
   }
 
-  const handlePay = async (form) => {
+  // Open PaymentModal: collect all open (pending+overdue) records for that tenant
+  const handleOpenPayModal = async (rentRow) => {
+    const tenant = rentRow.tenant
+    if (!tenant) return
+
+    // Get ALL open records for this tenant (across all months)
+    try {
+      const res = await getRents(propertyId, { tenantId: tenant._id })
+      const openRents = (res.data?.data ?? [])
+        .filter(r => r.status === 'pending' || r.status === 'partial' || r.status === 'overdue')
+        .sort((a, b) => {
+          if (a.year !== b.year) return a.year - b.year
+          return a.month - b.month
+        })
+      const currentBalance = tenant.ledgerBalance ?? 0
+      setPayModal({ tenant, openRents, currentBalance })
+    } catch {
+      // Fallback: just use the current row
+      const openRents = (['pending','partial','overdue'].includes(rentRow.status)) ? [rentRow] : []
+      setPayModal({ tenant, openRents, currentBalance: tenant.ledgerBalance ?? 0 })
+    }
+  }
+
+  const handleRecordPayment = async (form) => {
     setPaying(true)
     try {
-      await markRentPaid(propertyId, payModal._id, form)
+      await recordPayment(propertyId, {
+        tenantId:    payModal.tenant._id,
+        amount:      form.amount,
+        method:      form.method,
+        referenceId: form.referenceId || undefined,
+        paymentDate: form.paymentDate,
+        notes:       form.notes || undefined,
+      })
       setPayModal(null)
       refetch()
       toast('Payment recorded', 'success')
@@ -559,6 +827,8 @@ const Rent = () => {
     try {
       const res = await sendRentReminder(propertyId, rent.tenant._id)
       setReminderModal(res.data.data)
+      // Track as reminded in this session
+      setReminded((prev) => new Set([...prev, rent.tenant._id]))
     } catch (err) {
       toast(err.response?.data?.message || 'Failed to send reminder', 'error')
     } finally {
@@ -748,10 +1018,11 @@ const Rent = () => {
                         rent={r}
                         selected={selected.has(r._id)}
                         onSelect={toggleSelect}
-                        onMarkPaid={setPayModal}
+                        onMarkPaid={handleOpenPayModal}
                         onRemind={handleRemind}
                         onLedger={setLedgerTenant}
                         reminding={remindingId === r._id}
+                        reminded={reminded}
                       />
                     ))}
                   </tbody>
@@ -788,7 +1059,14 @@ const Rent = () => {
 
       {/* ── Modals ── */}
       {payModal && (
-        <MarkPaidModal rent={payModal} onConfirm={handlePay} onClose={() => setPayModal(null)} paying={paying} />
+        <PaymentModal
+          tenant={payModal.tenant}
+          openRents={payModal.openRents}
+          currentBalance={payModal.currentBalance}
+          onConfirm={handleRecordPayment}
+          onClose={() => setPayModal(null)}
+          paying={paying}
+        />
       )}
       {reminderModal && (
         <ReminderModal result={reminderModal} onClose={() => setReminderModal(null)} />
