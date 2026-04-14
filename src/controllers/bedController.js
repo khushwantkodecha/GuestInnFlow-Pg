@@ -11,6 +11,7 @@ const { generateBedLabel } = require('../utils/numberingUtils');
 const { recalculateRoomRent } = require('../utils/recalculateRoomRent');
 const { calculateRent }       = require('../../shared/calculateRent');
 const rentService             = require('../services/rentService');
+const { vacateBedCore }       = require('../services/vacateService');
 
 // ── Minimal structured logger ────────────────────────────────────────────────
 const logger = {
@@ -390,11 +391,27 @@ const assignBed = asyncHandler(async (req, res) => {
     });
   }
 
-  // Heal stale bed reference on vacated tenants so they surface in assignable searches
-  if (tenant.status === 'vacated' && tenant.bed) {
-    logger.warn('assign.stale_bed_ref.heal', { tenantId: tenant._id, staleBed: tenant.bed });
-    tenant.bed = null;
-    await tenant.save();
+  if (tenant.status === 'merged') {
+    return res.status(409).json({
+      success: false,
+      message: 'Cannot assign a merged tenant to a bed. Use the active profile this tenant was merged into.',
+      code: 'TENANT_MERGED',
+    });
+  }
+
+  // Fix 7: block vacated tenants — they must be explicitly reactivated before reassignment.
+  // Heal any stale bed reference first so it does not pollute future queries, then reject.
+  if (tenant.status === 'vacated') {
+    if (tenant.bed) {
+      logger.warn('assign.stale_bed_ref.heal', { tenantId: tenant._id, staleBed: tenant.bed });
+      tenant.bed = null;
+      await tenant.save();
+    }
+    return res.status(409).json({
+      success: false,
+      message: 'Cannot assign a vacated tenant to a bed. Create a new tenant record or reuse an existing active profile.',
+      code: 'TENANT_VACATED',
+    });
   }
 
   // Authoritative check: query the Bed collection, not tenant.bed (which can be stale)
@@ -405,6 +422,17 @@ const assignBed = asyncHandler(async (req, res) => {
       success: false,
       message: 'Tenant is already assigned to a bed. Check out first.',
       code: 'TENANT_ALREADY_ASSIGNED',
+    });
+  }
+
+  // ── Billing anchor guard ───────────────────────────────────────────────────
+  // checkInDate is the immutable anchor for all billing cycle calculations.
+  // Reject activation if neither the request body nor the existing tenant doc has one.
+  if (!moveInDate && !tenant.checkInDate) {
+    return res.status(400).json({
+      success: false,
+      message:  'moveInDate (check-in date) is required to activate a tenant. Billing cycles cannot be calculated without it.',
+      code:     'CHECKIN_DATE_REQUIRED',
     });
   }
 
@@ -450,12 +478,37 @@ const assignBed = asyncHandler(async (req, res) => {
   const capturedAdvMode = bed.reservation?.reservationMode   ?? null;
 
   // ── Orphan cleanup: if bed was reserved for a DIFFERENT reserved tenant, free them ─
+  // CRITICAL: if the displaced tenant had a reservation advance, reverse the ledger credit
+  // so their balance returns to 0. Without this the money is invisibly "lost" in the ledger.
   if (bed.status === 'reserved' && bed.tenant && String(bed.tenant) !== String(tenantId)) {
     const orphanedLead = await Tenant.findOne({ _id: bed.tenant, status: 'reserved' });
     if (orphanedLead) {
-      orphanedLead.status            = 'vacated';
-      orphanedLead.bed               = null;
-      orphanedLead.reservationAmount = 0;
+      const orphanAdvAmt  = bed.reservation?.reservationAmount ?? 0;
+      const orphanAdvMode = bed.reservation?.reservationMode   ?? null;
+
+      // Reverse the earlier reservation_paid credit so the orphaned tenant's balance → 0
+      if (orphanAdvAmt > 0) {
+        const prevOrphanBal = await rentService.getTenantBalance(orphanedLead._id);
+        const newOrphanBal  = prevOrphanBal + orphanAdvAmt;  // debit reverses the credit
+        await LedgerEntry.create({
+          tenant:        orphanedLead._id,
+          property:      req.params.propertyId,
+          type:          'debit',
+          amount:        orphanAdvAmt,
+          balanceAfter:  newOrphanBal,
+          referenceType: 'reservation_refunded',
+          referenceId:   bed._id,
+          description:   `Reservation advance ₹${orphanAdvAmt} reversed — bed reassigned to another tenant (${orphanAdvMode ?? 'unknown'} mode)`,
+        });
+        orphanedLead.ledgerBalance     = newOrphanBal;
+        orphanedLead.reservationAmount = 0;
+        logger.info('bed.assign.orphan_advance_reversed', {
+          bedId: bed._id, orphanedTenantId: orphanedLead._id, amount: orphanAdvAmt,
+        });
+      }
+
+      orphanedLead.status = 'vacated';
+      orphanedLead.bed    = null;
       await orphanedLead.save();
       logger.info('bed.assign.orphan_reserved_vacated', { bedId: bed._id, orphanedTenantId: orphanedLead._id });
     }
@@ -490,7 +543,10 @@ const assignBed = asyncHandler(async (req, res) => {
       tenant.checkOutDate = null;
       // Seed rentAmount with a placeholder; recalculate overwrites it below
       tenant.rentAmount   = 0;
-      if (deposit !== undefined)  tenant.depositAmount = Number(deposit);
+      // Only overwrite depositAmount if a positive value is explicitly provided.
+      // deposit=0 or deposit=undefined must NOT erase an existing deposit balance
+      // (e.g. operator toggles deposit off on re-assignment after collecting one earlier).
+      if (deposit !== undefined && Number(deposit) > 0) tenant.depositAmount = Number(deposit);
       if (moveInDate)             tenant.checkInDate   = new Date(moveInDate);
       if (dueDate !== undefined) {
         const d = Number(dueDate);
@@ -528,9 +584,11 @@ const assignBed = asyncHandler(async (req, res) => {
     if (disposition === 'convert_deposit') {
       // Reverse the reservation_advance credit → debit so it no longer offsets rent.
       // Then add the amount into depositBalance as a new deposit.
-      const freshTenant = await Tenant.findById(tenantId).select('ledgerBalance depositBalance depositStatus depositPaid').lean();
-      const currentLedgerBal = freshTenant?.ledgerBalance ?? 0;
-      const newLedgerBal     = currentLedgerBal + capturedAdvAmt; // debit increases balance
+      const [currentLedgerBal, freshTenant] = await Promise.all([
+        rentService.getTenantBalance(tenantId),
+        Tenant.findById(tenantId).select('depositBalance depositStatus depositPaid').lean(),
+      ]);
+      const newLedgerBal = currentLedgerBal + capturedAdvAmt; // debit increases balance
 
       await LedgerEntry.create({
         tenant:        tenantId,
@@ -553,14 +611,13 @@ const assignBed = asyncHandler(async (req, res) => {
         }
       );
 
-      // Audit entry for the deposit portion
-      const afterDeposit = await Tenant.findById(tenantId).select('ledgerBalance').lean();
+      // Audit entry for the deposit portion — informational, rent balance unchanged from debit
       await LedgerEntry.create({
         tenant:        tenantId,
         property:      req.params.propertyId,
         type:          'credit',
         amount:        capturedAdvAmt,
-        balanceAfter:  afterDeposit?.ledgerBalance ?? 0,
+        balanceAfter:  await rentService.getTenantBalance(tenantId),
         referenceType: 'deposit_collected',
         referenceId:   bed._id,
         description:   `Security deposit ₹${capturedAdvAmt} sourced from reservation advance at check-in`,
@@ -590,13 +647,12 @@ const assignBed = asyncHandler(async (req, res) => {
       { $set: { depositBalance: depositFromBody, depositStatus: 'held', depositPaid: true } }
     );
     // Audit-only ledger entry — does NOT affect rent ledgerBalance
-    const freshForDeposit = await Tenant.findById(tenantId).select('ledgerBalance').lean();
     await LedgerEntry.create({
       tenant:        tenantId,
       property:      req.params.propertyId,
       type:          'credit',
       amount:        depositFromBody,
-      balanceAfter:  freshForDeposit?.ledgerBalance ?? 0,  // balance unchanged
+      balanceAfter:  await rentService.getTenantBalance(tenantId),  // informational — balance unchanged
       referenceType: 'deposit_collected',
       referenceId:   bed._id,
       description:   `Security deposit collected at assignment`,
@@ -650,6 +706,8 @@ const vacateCheck = asyncHandler(async (req, res) => {
     .select('name phone rentAmount depositAmount depositPaid depositReturned depositBalance depositStatus checkInDate');
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant record not found' });
 
+  const ledgerBalance = await rentService.getLastBalance(tenant._id);
+
   const [pendingRents, paidRents, partialRents] = await Promise.all([
     RentPayment.find({
       tenant: tenant._id,
@@ -687,16 +745,19 @@ const vacateCheck = asyncHandler(async (req, res) => {
     success: true,
     data: {
       tenant: {
-        _id:             tenant._id,
-        name:            tenant.name,
-        phone:           tenant.phone,
-        rentAmount:      tenant.rentAmount,
-        depositAmount:   tenant.depositAmount  ?? 0,
-        depositPaid:     tenant.depositPaid    ?? false,
-        depositReturned: tenant.depositReturned ?? false,
-        depositBalance:  tenant.depositBalance ?? 0,
-        depositStatus:   tenant.depositStatus  ?? null,
-        checkInDate:     tenant.checkInDate,
+        _id:                 tenant._id,
+        name:                tenant.name,
+        phone:               tenant.phone,
+        rentAmount:          tenant.rentAmount,
+        depositAmount:       tenant.depositAmount  ?? 0,
+        depositPaid:         tenant.depositPaid    ?? false,
+        depositReturned:     tenant.depositReturned ?? false,
+        depositBalance:      tenant.depositBalance ?? 0,
+        depositStatus:       tenant.depositStatus  ?? null,
+        checkInDate:         tenant.checkInDate,
+        // Authoritative ledger balance — positive = owes, negative = advance credit
+        ledgerBalance:       ledgerBalance,
+        advanceCreditAmount: ledgerBalance < 0 ? Math.abs(ledgerBalance) : 0,
       },
       totalRentAmount,
       totalPaidAmount,
@@ -736,7 +797,6 @@ const vacateBed = asyncHandler(async (req, res) => {
     });
   }
 
-  // Already vacated guard (double-submit / race condition)
   if (tenant.status === 'vacated') {
     return res.status(409).json({
       success: false,
@@ -745,211 +805,37 @@ const vacateBed = asyncHandler(async (req, res) => {
     });
   }
 
-  const {
-    checkOutDate, notes,
-    vacateOption,    // 'collect' | 'proceed'
-    paymentAmount,   // used when vacateOption === 'collect'
-    paymentMethod,   // used when vacateOption === 'collect'
-    depositAction,   // 'adjust' | 'adjust_and_refund' | 'refund' | 'forfeit' | null
-    refundAmount,    // used when depositAction === 'refund'; defaults to depositBalance
-    refundMethod,    // payment method used to return deposit (for audit description)
-  } = req.body;
-  const traceId = crypto.randomUUID();
-
-  // Capture deposit balance BEFORE any modifications (needed for forfeit ledger entry)
-  const preForfeitDepositBalance = tenant.depositBalance ?? tenant.depositAmount ?? 0;
-
-  // ── Step 1a: Deposit action ────────────────────────────────────────────────
-  let depositAdjustedAmount = 0;
-  if (depositAction === 'adjust' || depositAction === 'adjust_and_refund') {
-    const depositBal = tenant.depositBalance ?? tenant.depositAmount ?? 0;
-    if (depositBal > 0) {
-      const openRents = await RentPayment.find({
-        tenant:   tenant._id,
-        property: req.params.propertyId,
-        status:   { $in: ['pending', 'partial', 'overdue'] },
-      }).lean();
-      const pendingTotal = openRents.reduce((s, r) => s + (r.amount - (r.paidAmount ?? 0)), 0);
-      const applyAmt = Math.min(depositBal, pendingTotal);
-      if (applyAmt > 0) {
-        try {
-          await rentService.allocatePayment(req.params.propertyId, tenant._id, {
-            amount:      applyAmt,
-            method:      'deposit_adjustment',
-            notes:       'Adjusted from security deposit at vacate',
-            paymentDate: checkOutDate ?? new Date().toISOString(),
-          });
-          depositAdjustedAmount = applyAmt;
-          logger.info('bed.vacate.deposit_adjusted', { traceId, tenantId: tenant._id, amount: applyAmt });
-        } catch (adjErr) {
-          logger.error('bed.vacate.deposit_adjust_failed', { traceId, tenantId: tenant._id, error: adjErr.message });
-          return res.status(400).json({ success: false, message: adjErr.message || 'Failed to adjust deposit', code: 'ADJUSTMENT_ERROR' });
-        }
-      }
-    }
-  }
-
-  // ── Step 1b: Collect cash payment ─────────────────────────────────────────
-  if (vacateOption === 'collect') {
-    const amt = Number(paymentAmount);
-    if (!amt || amt <= 0) {
-      return res.status(400).json({ success: false, message: 'paymentAmount must be positive for collect option', code: 'INVALID_PAYMENT' });
-    }
-    try {
-      await rentService.allocatePayment(req.params.propertyId, tenant._id, {
-        amount:      amt,
-        method:      paymentMethod ?? 'cash',
-        notes:       'Collected at vacate',
-        paymentDate: checkOutDate ?? new Date().toISOString(),
-      });
-      logger.info('bed.vacate.payment_collected', { traceId, tenantId: tenant._id, amount: amt });
-    } catch (payErr) {
-      logger.error('bed.vacate.payment_failed', { traceId, tenantId: tenant._id, error: payErr.message });
-      return res.status(400).json({ success: false, message: payErr.message || 'Failed to record payment', code: 'PAYMENT_ERROR' });
-    }
-  }
-  // vacateOption === 'proceed' (or undefined): skip cash collection, vacate as-is
-
-  // ── Step 2: Vacate the bed and tenant ────────────────────────────────────────
   try {
-    await runWithRetry(async (session) => {
-      bed.status = 'vacant';
-      bed.tenant = null;
-      await bed.save({ session });
+    const result = await vacateBedCore({
+      propertyId: req.params.propertyId,
+      room,
+      bed,
+      tenant,
+      opts:   req.body,
+      userId: req.user._id,
+    });
 
-      tenant.status       = 'vacated';
-      tenant.checkOutDate = checkOutDate ? new Date(checkOutDate) : new Date();
-      tenant.bed          = null;
-      if (notes !== undefined) tenant.vacateNotes = notes || null;
-
-      // Apply deposit state changes inside the transaction
-      if ((depositAction === 'adjust' || depositAction === 'adjust_and_refund') && depositAdjustedAmount > 0) {
-        const prevBal = tenant.depositBalance ?? tenant.depositAmount ?? 0;
-        const newBal  = Math.max(0, prevBal - depositAdjustedAmount);
-        if (depositAction === 'adjust_and_refund') {
-          // Adjust against dues + mark full remainder as refunded
-          tenant.depositBalance  = 0;
-          tenant.depositStatus   = 'refunded';
-          tenant.depositReturned = true;
-        } else {
-          tenant.depositBalance = newBal;
-          tenant.depositStatus  = newBal > 0 ? 'held' : 'adjusted';
-        }
-      } else if (depositAction === 'refund') {
-        const depBal = tenant.depositBalance ?? tenant.depositAmount ?? 0;
-        const refAmt = refundAmount > 0 ? Math.min(Number(refundAmount), depBal) : depBal;
-        tenant.depositBalance  = Math.max(0, depBal - refAmt);
-        tenant.depositStatus   = tenant.depositBalance > 0 ? 'held' : 'refunded';
-        tenant.depositReturned = tenant.depositBalance === 0;
-      } else if (depositAction === 'forfeit') {
-        tenant.depositBalance  = 0;
-        tenant.depositStatus   = 'forfeited';
-        tenant.depositReturned = false;
-      }
-
-      await tenant.save({ session });
-
-      // Recalculate rent for remaining occupied tenants (per_room divisor changes)
-      await recalculateRoomRent(room, session, 'vacate', traceId);
+    res.json({
+      success: true,
+      message: 'Bed vacated successfully',
+      data: {
+        bed:    { _id: result.bed._id, bedNumber: result.bed.bedNumber, status: result.bed.status },
+        tenant: {
+          _id:             result.tenant._id,
+          name:            result.tenant.name,
+          checkOutDate:    result.tenant.checkOutDate,
+          depositReturned: result.tenant.depositReturned,
+          depositBalance:  result.tenant.depositBalance,
+          depositStatus:   result.tenant.depositStatus,
+        },
+      },
     });
   } catch (err) {
-    logger.error('bed.vacate.transaction_failed', { traceId, bedId: bed._id, tenantId: tenant._id, error: err.message });
-    throw err;
+    const status = err.status ?? 500;
+    const code   = err.code   ?? 'VACATE_ERROR';
+    logger.error('bed.vacate.failed', { bedId: bed._id, tenantId: tenant._id, error: err.message });
+    res.status(status).json({ success: false, message: err.message, code });
   }
-
-  // ── Deposit audit ledger entries (after transaction) ────────────────────────
-  if (depositAction === 'forfeit') {
-    if (preForfeitDepositBalance > 0) {
-      const freshAfterForfeit = await Tenant.findById(tenant._id).select('ledgerBalance').lean();
-      await LedgerEntry.create({
-        tenant:        tenant._id,
-        property:      req.params.propertyId,
-        type:          'debit',
-        amount:        preForfeitDepositBalance,
-        balanceAfter:  freshAfterForfeit?.ledgerBalance ?? 0,
-        referenceType: 'deposit_forfeited',
-        referenceId:   tenant._id,
-        description:   `Security deposit ₹${preForfeitDepositBalance} forfeited at vacate — kept by property`,
-      });
-      logger.info('bed.vacate.deposit_forfeited', { traceId, tenantId: tenant._id, amount: preForfeitDepositBalance });
-    }
-  } else if ((depositAction === 'adjust' || depositAction === 'adjust_and_refund') && depositAdjustedAmount > 0) {
-    const freshAfterAdj = await Tenant.findById(tenant._id).select('ledgerBalance depositBalance').lean();
-    await LedgerEntry.create({
-      tenant:        tenant._id,
-      property:      req.params.propertyId,
-      type:          'credit',
-      amount:        depositAdjustedAmount,
-      balanceAfter:  freshAfterAdj?.ledgerBalance ?? 0,
-      referenceType: 'deposit_adjusted',
-      referenceId:   tenant._id,
-      method:        'deposit_adjustment',
-      description:   `Security deposit ₹${depositAdjustedAmount} adjusted against dues at vacate`,
-    });
-    // For adjust_and_refund, also write the refund entry for the surplus
-    if (depositAction === 'adjust_and_refund') {
-      const preAdjustBal  = preForfeitDepositBalance;  // captured before any modifications
-      const surplusRefund = Math.max(0, preAdjustBal - depositAdjustedAmount);
-      if (surplusRefund > 0) {
-        const methodLabel = refundMethod ?? 'cash';
-        await LedgerEntry.create({
-          tenant:        tenant._id,
-          property:      req.params.propertyId,
-          type:          'credit',
-          amount:        surplusRefund,
-          balanceAfter:  freshAfterAdj?.ledgerBalance ?? 0,
-          referenceType: 'deposit_refunded',
-          referenceId:   tenant._id,
-          method:        methodLabel,
-          description:   `Security deposit surplus ₹${surplusRefund} refunded to tenant at vacate via ${methodLabel}`,
-        });
-        logger.info('bed.vacate.deposit_surplus_refunded', { traceId, tenantId: tenant._id, surplusRefund });
-      }
-    }
-  } else if (depositAction === 'refund') {
-    const depBal      = tenant.depositBalance ?? tenant.depositAmount ?? 0;
-    const refundedAmt = refundAmount > 0
-      ? Math.min(Number(refundAmount), depBal)
-      : depBal;
-    if (refundedAmt > 0) {
-      const methodLabel = refundMethod ?? 'cash';
-      await LedgerEntry.create({
-        tenant:        tenant._id,
-        property:      req.params.propertyId,
-        type:          'credit',
-        amount:        refundedAmt,
-        balanceAfter:  tenant.ledgerBalance ?? 0,  // informational — rent balance unchanged
-        referenceType: 'deposit_refunded',
-        referenceId:   tenant._id,
-        method:        methodLabel,
-        description:   `Security deposit ₹${refundedAmt} refunded to tenant at vacate via ${methodLabel}`,
-      });
-    }
-  }
-
-  logger.info('bed.vacated', {
-    traceId,
-    bedId:           bed._id,
-    tenantId:        tenant._id,
-    roomId:          req.params.roomId,
-    depositAction,
-    depositReturned: tenant.depositReturned,
-    userId:          req.user._id,
-  });
-
-  res.json({
-    success: true,
-    message: 'Bed vacated successfully',
-    data: {
-      bed:    { _id: bed._id, bedNumber: bed.bedNumber, status: bed.status },
-      tenant: {
-        _id: tenant._id, name: tenant.name, checkOutDate: tenant.checkOutDate,
-        depositReturned: tenant.depositReturned,
-        depositBalance:  tenant.depositBalance,
-        depositStatus:   tenant.depositStatus,
-      },
-    },
-  });
 });
 
 // PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/reserve
@@ -973,7 +859,29 @@ const reserveBed = asyncHandler(async (req, res) => {
   }
 
   const { reservedTill, moveInDate, notes, tenantId, name, phone, replace,
-          reservationAmount: rawAdvAmt, reservationMode: rawAdvMode } = req.body;
+          reservationAmount: rawAdvAmt, reservationMode: rawAdvMode,
+          autoVacate } = req.body;
+  // autoVacate: boolean — when true and the tenant is active/notice with an occupied bed,
+  // the old bed is freed and the tenant transitions to 'reserved'. Must be explicitly
+  // confirmed by the caller (frontend should prompt before sending autoVacate=true).
+
+  // ── reservedTill validation ───────────────────────────────────────────────
+  // Must be a valid future date at least 1 hour from now.
+  if (!reservedTill) {
+    return res.status(400).json({ success: false, message: 'reservedTill is required', code: 'MISSING_RESERVED_TILL' });
+  }
+  const reservedTillDate = new Date(reservedTill);
+  if (isNaN(reservedTillDate.getTime())) {
+    return res.status(400).json({ success: false, message: 'reservedTill is not a valid date', code: 'INVALID_RESERVED_TILL' });
+  }
+  const minReservedTill = new Date(Date.now() + 60 * 60 * 1000); // now + 1 hour
+  if (reservedTillDate < minReservedTill) {
+    return res.status(400).json({
+      success: false,
+      message: 'reservedTill must be at least 1 hour in the future',
+      code: 'RESERVED_TILL_TOO_SOON',
+    });
+  }
 
   // ── Advance (token) amount validation ────────────────────────────────────
   const advAmt  = rawAdvAmt !== undefined && rawAdvAmt !== null && rawAdvAmt !== ''
@@ -1012,13 +920,69 @@ const reserveBed = asyncHandler(async (req, res) => {
       await tenant.save();
     }
     // Authoritative check: query the Bed collection, not tenant.bed (which can be stale)
-    const occupiedBed = await Bed.findOne({ tenant: tenant._id, status: 'occupied', isActive: true }).lean();
+    const occupiedBed = await Bed.findOne({ tenant: tenant._id, status: 'occupied', isActive: true })
+      .select('_id bedNumber room status tenant').lean();
+
     if (occupiedBed) {
-      return res.status(409).json({
-        success: false,
-        message: `${tenant.name} is already assigned to a bed. Vacate them first.`,
-        code: 'TENANT_ASSIGNED',
-      });
+      // ── Notice → Reserve transition ────────────────────────────────────────
+      // Active or notice tenants can transition directly to a reservation on a
+      // new bed when autoVacate=true. The old bed is freed (minimal vacate — no
+      // deposit/payment handling), rent is recalculated for the old room, and
+      // the tenant's status becomes 'reserved'. Callers must send autoVacate=true
+      // explicitly; without it we return a descriptive error so the frontend can
+      // prompt the operator for confirmation before re-submitting.
+      if ((tenant.status === 'active' || tenant.status === 'notice') && autoVacate === true) {
+        logger.info('reserve.auto_vacate.start', {
+          tenantId: tenant._id, oldBedId: occupiedBed._id,
+          newBedId: bed._id, userId: req.user._id,
+        });
+
+        // Free the old bed
+        await Bed.updateOne(
+          { _id: occupiedBed._id },
+          { $set: { status: 'vacant', tenant: null } }
+        );
+
+        // Recalculate rent for the old room so per-room splits stay correct
+        try {
+          const oldRoom = await Room.findById(occupiedBed.room);
+          if (oldRoom) {
+            await recalculateRoomRent(oldRoom, null, 'vacate', `auto_vacate_${tenant._id}`);
+          }
+        } catch (rcErr) {
+          logger.warn('reserve.auto_vacate.recalc_failed', {
+            tenantId: tenant._id, oldBedId: occupiedBed._id, error: rcErr.message,
+          });
+        }
+
+        // Clear tenant's current bed reference — status will be set to 'reserved' below
+        tenant.bed    = null;
+        tenant.status = 'reserved';
+        await tenant.save();
+
+        logger.info('reserve.auto_vacate.done', { tenantId: tenant._id, oldBedId: occupiedBed._id });
+
+      } else if (tenant.status === 'active' || tenant.status === 'notice') {
+        // Return a structured error so the frontend can show a confirmation prompt
+        // before re-submitting with autoVacate=true.
+        const oldRoom = await Room.findById(occupiedBed.room).select('roomNumber').lean();
+        return res.status(409).json({
+          success: false,
+          message: `${tenant.name} is currently assigned to a bed. Set autoVacate=true to release the old bed and move them to this reservation.`,
+          code: 'TENANT_ASSIGNED_AUTO_VACATE',
+          currentAssignment: {
+            bedId:      occupiedBed._id,
+            bedNumber:  occupiedBed.bedNumber,
+            roomNumber: oldRoom?.roomNumber ?? null,
+          },
+        });
+      } else {
+        return res.status(409).json({
+          success: false,
+          message: `${tenant.name} is already assigned to a bed. Vacate them first.`,
+          code: 'TENANT_ASSIGNED',
+        });
+      }
     }
   } else {
     // ── Path B: find-or-create a reserved tenant by phone ────────────────────
@@ -1125,9 +1089,9 @@ const reserveBed = asyncHandler(async (req, res) => {
 
     // Reverse the advance credit that was written when the displaced reservation was created
     if (oldAdvAmt > 0 && existingReservedBed.tenant) {
-      const replacedTenant = await Tenant.findById(existingReservedBed.tenant).select('ledgerBalance property');
+      const replacedTenant = await Tenant.findById(existingReservedBed.tenant).select('property');
       if (replacedTenant) {
-        const prevBal = replacedTenant.ledgerBalance ?? 0;
+        const prevBal = await rentService.getTenantBalance(replacedTenant._id);
         const newBal  = prevBal + oldAdvAmt;   // debit reverses the earlier credit
         await LedgerEntry.create({
           tenant:        replacedTenant._id,
@@ -1154,57 +1118,60 @@ const reserveBed = asyncHandler(async (req, res) => {
     });
   }
 
-  // ── Link bed ↔ tenant ─────────────────────────────────────────────────────
-  tenant.bed = bed._id;
-  if (tenant.status === 'reserved' && moveInDate) {
-    tenant.checkInDate = new Date(moveInDate);
-  }
-  await tenant.save();
+  // ── Fix 1: Atomic link — wrap tenant save + bed save + ledger write in a transaction ──
+  // Without a session, a crash between bed.save() and LedgerEntry.create() leaves the
+  // bed reserved but with no advance credit, or a tenant pointing at the wrong bed.
+  const reserveTraceId = crypto.randomUUID();
+  try {
+    await runWithRetry(async (session) => {
+      // Link tenant → bed
+      tenant.bed = bed._id;
+      if (tenant.status === 'reserved' && moveInDate) {
+        tenant.checkInDate = new Date(moveInDate);
+      }
+      await tenant.save({ session });
 
-  bed.status       = 'reserved';
-  bed.reservedTill = new Date(reservedTill);
-  bed.tenant       = tenant._id;
-  bed.reservation  = {
-    tenantId:          tenant._id,
-    name:              tenant.name,
-    phone:             tenant.phone,
-    moveInDate:        moveInDate ? new Date(moveInDate) : null,
-    notes:             notes || null,
-    source:            tenantId ? 'existing_tenant' : 'reserved',
-    reservationAmount: advAmt,
-    reservationMode:   advMode,
-    reservationStatus: advAmt > 0 ? 'held' : null,
-  };
-  await bed.save();
+      // Link bed → tenant
+      bed.status       = 'reserved';
+      bed.reservedTill = reservedTillDate;
+      bed.tenant       = tenant._id;
+      bed.reservation  = {
+        tenantId:          tenant._id,
+        name:              tenant.name,
+        phone:             tenant.phone,
+        moveInDate:        moveInDate ? new Date(moveInDate) : null,
+        notes:             notes || null,
+        source:            tenantId ? 'existing_tenant' : 'reserved',
+        reservationAmount: advAmt,
+        reservationMode:   advMode,
+        reservationStatus: advAmt > 0 ? 'held' : null,
+      };
+      await bed.save({ session });
 
-  // ── Record advance collection in ledger immediately ──────────────────────
-  // Storing the amount only on bed.reservation is invisible to the financial
-  // system. Write a credit entry now so the money shows up in the ledger as
-  // soon as it is collected, regardless of when the tenant is assigned.
-  if (advAmt > 0) {
-    try {
-      const freshTenant  = await Tenant.findById(tenant._id).select('ledgerBalance').lean();
-      const prevBal      = freshTenant?.ledgerBalance ?? 0;
-      const newBal       = prevBal - advAmt;  // credit reduces outstanding balance
-      await LedgerEntry.create({
-        tenant:        tenant._id,
-        property:      req.params.propertyId,
-        type:          'credit',
-        amount:        advAmt,
-        balanceAfter:  newBal,
-        referenceType: 'reservation_paid',
-        referenceId:   bed._id,
-        description:   `Reservation advance collected (${advMode} mode) — Room ${room.roomNumber} Bed ${bed.bedNumber}`,
-      });
-      await Tenant.updateOne({ _id: tenant._id }, { $set: { ledgerBalance: newBal, reservationAmount: advAmt } });
-      logger.info('bed.reserved.advance_recorded', {
-        bedId: bed._id, tenantId: tenant._id, amount: advAmt, mode: advMode, newBal,
-      });
-    } catch (advErr) {
-      logger.warn('bed.reserved.advance_record_failed', {
-        bedId: bed._id, tenantId: tenant._id, error: advErr.message,
-      });
-    }
+      // Record advance in ledger inside the same transaction
+      if (advAmt > 0) {
+        const prevBal = await rentService.getTenantBalance(tenant._id);
+        const newBal  = prevBal - advAmt;  // credit reduces outstanding balance
+        await LedgerEntry.create([{
+          tenant:        tenant._id,
+          property:      req.params.propertyId,
+          type:          'credit',
+          amount:        advAmt,
+          balanceAfter:  newBal,
+          referenceType: 'reservation_paid',
+          referenceId:   bed._id,
+          description:   `Reservation advance collected (${advMode} mode) — Room ${room.roomNumber} Bed ${bed.bedNumber}`,
+        }], { session });
+        // Fix 4: ledger is the source of truth — do NOT mirror amount into tenant.reservationAmount.
+        await Tenant.updateOne({ _id: tenant._id }, { $set: { ledgerBalance: newBal } }, { session });
+        logger.info('bed.reserved.advance_recorded', {
+          reserveTraceId, bedId: bed._id, tenantId: tenant._id, amount: advAmt, mode: advMode, newBal,
+        });
+      }
+    });
+  } catch (err) {
+    logger.error('bed.reserve.transaction_failed', { reserveTraceId, bedId: bed._id, tenantId: tenant._id, error: err.message });
+    throw err;
   }
 
   logger.info('bed.reserved', {
@@ -1290,9 +1257,9 @@ const cancelReservation = asyncHandler(async (req, res) => {
   // Whether refunded or forfeited, the cancelled tenant's balance must return
   // to 0. Write a debit to cancel the credit that was written at reserve time.
   if (cancelAdvAmt > 0 && cancelTenantId) {
-    const refundTenant = await Tenant.findById(cancelTenantId).select('ledgerBalance property');
+    const refundTenant = await Tenant.findById(cancelTenantId).select('property');
     if (refundTenant) {
-      const prevBalance = refundTenant.ledgerBalance ?? 0;
+      const prevBalance = await rentService.getTenantBalance(refundTenant._id);
       const newBalance  = prevBalance + cancelAdvAmt;   // debit reverses the earlier credit
       await LedgerEntry.create({
         tenant:        refundTenant._id,
@@ -2181,14 +2148,13 @@ const midStayDepositAdjust = asyncHandler(async (req, res) => {
     { $set: { depositBalance: newDepositBal, depositStatus: newDepositBal > 0 ? 'held' : 'adjusted' } }
   );
 
-  // Audit ledger entry
-  const freshTenant = await Tenant.findById(tenant._id).select('ledgerBalance').lean();
+  // Audit ledger entry — derive balance from LedgerEntry after allocatePayment has written its entry
   await LedgerEntry.create({
     tenant:        tenant._id,
     property:      req.params.propertyId,
     type:          'credit',
     amount:        applyAmt,
-    balanceAfter:  freshTenant?.ledgerBalance ?? 0,
+    balanceAfter:  await rentService.getTenantBalance(tenant._id),
     referenceType: 'deposit_adjusted',
     referenceId:   tenant._id,
     method:        'deposit_adjustment',

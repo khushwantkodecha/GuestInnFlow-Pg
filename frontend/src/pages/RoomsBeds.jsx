@@ -1460,6 +1460,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
   const [resTenantId, setResTenantId]                   = useState(null)
   const [resSelectedTenant, setResSelectedTenant]       = useState(null)
   const [resExistingReservation, setResExistingReservation] = useState(null)
+  const [resAutoVacateConflict, setResAutoVacateConflict]   = useState(null) // { bedNumber, roomNumber }
 
   const [dueDay, setDueDay] = useState(5)  // grace days after cycle start before rent is due (0–28)
 
@@ -1592,6 +1593,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
     setResTenantId(null)
     setResSelectedTenant(null)
     setResExistingReservation(null)
+    setResAutoVacateConflict(null)
     setResMode('list')
     setResStep('tenant')
     setResNotesOpen(false)
@@ -3688,12 +3690,69 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
             const code = err.response?.data?.code
             if (code === 'TENANT_ALREADY_RESERVED') {
               setResExistingReservation(err.response.data.existingReservation)
+            } else if (code === 'TENANT_ASSIGNED_AUTO_VACATE') {
+              setResAutoVacateConflict(err.response.data.currentAssignment)
             } else {
               toast(err.response?.data?.message || 'Something went wrong', 'error')
             }
           } finally {
             setSubmitting(false)
           }
+        }
+
+        // ── Auto-vacate confirmation overlay ──────────────────────────────────
+        // Shown when an active/notice tenant is selected but is currently assigned
+        // to a bed. The operator must confirm before we release the old bed.
+        if (resAutoVacateConflict) {
+          const av = resAutoVacateConflict
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 rounded-2xl bg-orange-50 border border-orange-200 px-4 py-4">
+                <div className="h-9 w-9 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center shrink-0">
+                  <AlertTriangle size={16} className="text-orange-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-orange-800">Tenant is currently assigned</p>
+                  <p className="text-[11px] text-orange-700 mt-0.5 leading-relaxed">
+                    <span className="font-semibold">{resSelectedTenant?.name}</span> is in
+                    Bed {av.bedNumber}{av.roomNumber ? `, Room ${av.roomNumber}` : ''}.
+                    Reserving this bed will release their current bed.
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">What will happen</p>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 text-xs text-slate-600">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0 inline-block" />
+                    Bed {av.bedNumber} will be freed and marked vacant
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-600">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 inline-block" />
+                    Tenant status moves to Reserved (pending new move-in)
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-600">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0 inline-block" />
+                    Deposit and pending dues are not automatically settled
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <button type="button"
+                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors shadow-sm"
+                  onClick={() => setResAutoVacateConflict(null)}>
+                  Cancel
+                </button>
+                <button type="button" disabled={submitting}
+                  className="flex-1 rounded-xl bg-orange-500 hover:bg-orange-600 py-2.5 text-sm font-bold text-white transition-colors shadow-md shadow-orange-200/40 disabled:opacity-50 active:scale-[0.98]"
+                  onClick={() => doReserve({ autoVacate: true })}>
+                  {submitting ? 'Moving…' : 'Release & Reserve'}
+                </button>
+              </div>
+            </div>
+          )
         }
 
         // ── Conflict overlay — replaces entire step flow ──────────────────────
@@ -5230,7 +5289,7 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
   const [form, setForm] = useState({
     roomNumber: '', floor: '0', baseRent: '',
     rentType: 'per_bed', hasAC: false, hasAttachedBathroom: false,
-    category: 'standard', gender: 'unisex', notes: '',
+    category: 'standard', gender: 'male', notes: '',
   })
   const [errors, setErrors] = useState({})
 
@@ -5303,7 +5362,7 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
   const canSubmit = form.roomNumber.trim() && form.baseRent && !saving
 
   return (
-    <Modal onClose={onClose} size="lg">
+    <Modal onClose={onClose} size="lg" disableBackdropClose>
       <form onSubmit={handleSubmit} className="-mx-5 -mt-5 flex flex-col">
 
         {/* ── Header ── */}
@@ -5939,7 +5998,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
   const fspTotal     = newRentType === 'per_bed' ? fspPerTenant * newCapacity : newBaseRent
 
   return (
-    <Modal onClose={onClose} size="lg">
+    <Modal onClose={onClose} size="lg" disableBackdropClose>
       <form onSubmit={handleSubmit} className="-mx-5 -mt-5 flex flex-col max-h-[90vh]">
 
         {/* ── Header ── */}
@@ -6670,7 +6729,7 @@ const RoomFormModal = ({ mode = 'add', initialData, onSubmit, onClose, saving, o
     floor:               String(initialData?.floor ?? 0),
     baseRent:            initialData?.baseRent != null ? String(initialData.baseRent) : '',
     rentType:            initialData?.rentType ?? 'per_bed',
-    gender:              initialData?.gender ?? 'unisex',
+    gender:              initialData?.gender ?? 'male',
     hasAC:               initialData?.hasAC ?? false,
     hasAttachedBathroom: initialData?.hasAttachedBathroom ?? false,
     category:            initialData?.category ?? 'standard',
@@ -6739,6 +6798,7 @@ const RoomFormModal = ({ mode = 'add', initialData, onSubmit, onClose, saving, o
     <Modal
       title={isEdit ? `Edit Room ${initialData?.roomNumber ?? ''}` : 'Add New Room'}
       onClose={onClose}
+      disableBackdropClose
     >
       <form onSubmit={handleSubmit} className="space-y-5">
 

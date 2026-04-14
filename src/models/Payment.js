@@ -67,12 +67,59 @@ const paymentSchema = new mongoose.Schema(
         year:  { type: Number },
       },
     ],
+    // Breakdown of which Charge records this payment was applied to.
+    // Populated by allocatePayment Step 7 when a payment covers open charges.
+    // Used by reversePayment to restore Charge status on reversal.
+    chargeAllocations: [
+      {
+        chargeRecord: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Charge',
+          required: true,
+        },
+        amount: {
+          type: Number,
+          required: true,
+          min: 0,
+        },
+      },
+    ],
     // Amount of this payment that went toward advance balance
     // (i.e., payment exceeded total dues at the time of recording).
     advanceApplied: {
       type: Number,
       default: 0,
       min: 0,
+    },
+    // ── Idempotency ────────────────────────────────────────────────────────────
+    // Optional caller-supplied key (e.g. UUID from the client) to prevent
+    // duplicate payments on network retry. Stored as a sparse unique index so
+    // that payments without a key are never blocked by each other.
+    idempotencyKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    // ── Reversal ───────────────────────────────────────────────────────────────
+    reversed: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    reversedAt: {
+      type: Date,
+      default: null,
+    },
+    // User who triggered the reversal
+    reversedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    reversalReason: {
+      type: String,
+      trim: true,
+      default: null,
     },
   },
   { timestamps: true }
@@ -81,5 +128,7 @@ const paymentSchema = new mongoose.Schema(
 // Fast queries: tenant history, property-month reporting
 paymentSchema.index({ tenant: 1, createdAt: -1 });
 paymentSchema.index({ property: 1, paymentDate: -1 });
+// Idempotency: unique among keys that are not null
+paymentSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Payment', paymentSchema);

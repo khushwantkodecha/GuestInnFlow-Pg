@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ':*)",
+      "Bash(node -e \"require\\('./src/controllers/tenantController'\\)\")",
+      "Bash(node -e \"require\\('./src/controllers/bedController'\\)\")",
+      "Bash(node -e \"require\\('./src/services/rentService'\\)\")",
+      "Bash(node -e \"require\\('./src/services/vacateService'\\)\")",
+      "Bash(node -e \"require\\('./src/models/Expense'\\)\")",
+      "Bash(node -e \"require\\('./src/controllers/expenseController'\\)\")",
+      "Bash(node -e \"require\\('./src/routes/expenseRoutes'\\)\")",
+      "Bash(node -e \"require\\('./src/services/recurringExpenseCron'\\)\")"
+    ]
+  }
+}

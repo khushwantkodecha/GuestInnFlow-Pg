@@ -20,6 +20,8 @@ const { startReservationCron }        = require('./services/reservationCron');
 const { startRecurringExpenseCron }   = require('./services/recurringExpenseCron');
 const { startReminderScheduler }      = require('./services/reminderScheduler');
 const { startBillingCycleScheduler }  = require('./services/billingCycleScheduler');
+const { startOverdueSyncScheduler }           = require('./services/overdueSyncScheduler');
+const { startInvoiceReconciliationScheduler } = require('./services/invoiceReconciliationScheduler');
 
 connectDB();
 
@@ -28,6 +30,8 @@ startReservationCron();
 startRecurringExpenseCron();
 startReminderScheduler();
 startBillingCycleScheduler();
+startOverdueSyncScheduler();
+startInvoiceReconciliationScheduler();
 
 const rateLimit = require('express-rate-limit');
 

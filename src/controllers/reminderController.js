@@ -135,7 +135,8 @@ const triggerDailyRun = asyncHandler(async (req, res) => {
   const property = await verifyOwnership(req.params.propertyId, req.user._id);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
 
-  const stats = await reminderService.runDailyReminders();
+  // Fix 4: scope the run to this property only — don't fire for all properties
+  const stats = await reminderService.runDailyReminders(req.params.propertyId);
   res.json({
     success: true,
     message: `Daily reminder run complete: ${stats.sent} sent, ${stats.skipped} skipped, ${stats.failed} failed`,

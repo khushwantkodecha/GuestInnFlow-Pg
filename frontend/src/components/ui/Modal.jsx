@@ -2,7 +2,7 @@ import { X } from 'lucide-react'
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 
-const Modal = ({ title, onClose, children, size = 'md' }) => {
+const Modal = ({ title, onClose, children, size = 'md', disableBackdropClose = false }) => {
   useEffect(() => {
     const handler = (e) => e.key === 'Escape' && onClose()
     document.addEventListener('keydown', handler)
@@ -26,7 +26,7 @@ const Modal = ({ title, onClose, children, size = 'md' }) => {
       <div
         className="absolute inset-0 animate-fadeIn"
         style={{ background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(2px)' }}
-        onClick={onClose}
+        onClick={disableBackdropClose ? undefined : onClose}
       />
 
       {/* Panel */}

@@ -1295,7 +1295,7 @@ const Properties = () => {
 
       {/* ── Modals ── */}
       {modal && (
-        <Modal onClose={closeModal}>
+        <Modal onClose={closeModal} disableBackdropClose>
           <PropertyForm
             initial={modal === 'add' ? EMPTY_FORM : modal}
             onSubmit={handleSave}

@@ -24,12 +24,17 @@ const logger = {
 const recalculateRoomRent = async (room, session, reason, traceId) => {
   const tid = traceId ?? crypto.randomUUID();
 
-  // Fetch all active occupied beds, populating tenant for update
-  const occupiedBeds = await Bed.find({
+  // Fetch all active occupied beds, populating tenant for update.
+  // Fix 4: pass session so this read participates in the caller's transaction
+  // snapshot and sees the session's own prior writes (e.g. the vacating bed's
+  // status was just changed to 'vacant' inside the same transaction).
+  const bedQuery = Bed.find({
     room:     room._id,
     isActive: true,
     status:   'occupied',
   }).populate('tenant', 'rentAmount billingSnapshot rentHistory');
+  if (session) bedQuery.session(session);
+  const occupiedBeds = await bedQuery;
 
   const normalBeds  = occupiedBeds.filter((b) => !b.isExtra);
   const extraBeds   = occupiedBeds.filter((b) => b.isExtra);

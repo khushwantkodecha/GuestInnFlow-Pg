@@ -57,6 +57,12 @@ const reminderLogSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Number of retry attempts made after the initial failure (max 3)
+    retryCount: {
+      type: Number,
+      default: 0,
+    },
+
     // Delivery metadata
     meta: {
       waUrl: { type: String, default: null },
@@ -76,5 +82,7 @@ reminderLogSchema.index({ rentRecord: 1, type: 1, sentAt: 1 });
 // Stats aggregation
 reminderLogSchema.index({ property: 1, status: 1 });
 reminderLogSchema.index({ property: 1, type: 1 });
+// Retry query: find failed logs that haven't exhausted retry budget
+reminderLogSchema.index({ status: 1, retryCount: 1, createdAt: -1 });
 
 module.exports = mongoose.model('ReminderLog', reminderLogSchema);

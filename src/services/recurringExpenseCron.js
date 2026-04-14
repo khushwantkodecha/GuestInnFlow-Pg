@@ -26,12 +26,13 @@ const runRecurringExpenses = async () => {
   const now = new Date();
 
   try {
-    // Find all due recurring templates
+    // Find all due recurring templates (excluding soft-deleted)
     const due = await Expense.find({
       isRecurring:       true,
       isRecurringActive: true,
       recurringParentId: null,               // templates only, not child instances
       recurringNextRun:  { $lte: now },
+      isDeleted:         { $ne: true },
     });
 
     if (!due.length) return;

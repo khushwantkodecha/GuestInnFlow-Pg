@@ -1,6 +1,7 @@
 const Property    = require('../models/Property');
 const RentPayment = require('../models/RentPayment');
 const Tenant      = require('../models/Tenant');
+const Payment     = require('../models/Payment');
 const rentService = require('../services/rentService');
 const asyncHandler = require('../utils/asyncHandler');
 
@@ -130,9 +131,11 @@ const getTenantRentHistory = asyncHandler(async (req, res) => {
 /**
  * POST /api/properties/:propertyId/rents/payments
  * Body: { tenantId, amount, method, referenceId?, paymentDate?, notes? }
+ * Header: X-Idempotency-Key (optional) — caller-supplied deduplication key
  *
  * Records a payment and allocates it oldest-first across all open records
  * for that tenant. Creates a Payment document and a LedgerEntry credit.
+ * All writes are atomic inside a MongoDB transaction.
  */
 const recordPayment = asyncHandler(async (req, res) => {
   const property = await verifyOwnership(req.params.propertyId, req.user._id);
@@ -141,6 +144,7 @@ const recordPayment = asyncHandler(async (req, res) => {
   }
 
   const { tenantId, amount, method, referenceId, paymentDate, notes } = req.body;
+  const idempotencyKey = req.headers['x-idempotency-key'] ?? null;
 
   if (!tenantId) {
     return res.status(400).json({ success: false, message: 'tenantId is required' });
@@ -153,17 +157,51 @@ const recordPayment = asyncHandler(async (req, res) => {
     req.params.propertyId,
     tenantId,
     {
-      amount:      Number(amount),
+      amount:         Number(amount),
       method,
       referenceId,
       paymentDate,
       notes,
+      idempotencyKey,
     }
   );
 
-  res.status(201).json({
+  // 200 for idempotent replay (no new record created), 201 for new payment
+  const status = result.idempotent ? 200 : 201;
+  res.status(status).json({
     success: true,
-    message: 'Payment recorded',
+    message: result.idempotent ? 'Duplicate request — returning existing payment' : 'Payment recorded',
+    data:    result,
+  });
+});
+
+/**
+ * POST /api/properties/:propertyId/rents/payments/:id/reverse
+ * Body: { reason? }
+ *
+ * Reverses a previously recorded payment:
+ *  - Restores settled RentPayment records to pending/overdue.
+ *  - Writes a LedgerEntry debit (reversal).
+ *  - Marks the Payment document as reversed.
+ * All writes are atomic inside a MongoDB transaction.
+ */
+const reversePayment = asyncHandler(async (req, res) => {
+  const property = await verifyOwnership(req.params.propertyId, req.user._id);
+  if (!property) {
+    return res.status(404).json({ success: false, message: 'Property not found' });
+  }
+
+  const { reason } = req.body;
+
+  const result = await rentService.reversePayment(
+    req.params.propertyId,
+    req.params.id,
+    { reason, reversedBy: req.user._id }
+  );
+
+  res.json({
+    success: true,
+    message: 'Payment reversed',
     data:    result,
   });
 });
@@ -209,7 +247,7 @@ const addManualCharge = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
 
-  const { amount, description, chargeDate } = req.body;
+  const { amount, description, chargeDate, chargeType, dueDate } = req.body;
 
   if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
     return res.status(400).json({ success: false, message: 'amount must be a positive number' });
@@ -218,38 +256,28 @@ const addManualCharge = asyncHandler(async (req, res) => {
   const result = await rentService.addManualCharge(
     req.params.propertyId,
     req.params.tenantId,
-    { amount: Number(amount), description, chargeDate }
+    { amount: Number(amount), description, chargeDate, chargeType, dueDate }
   );
 
   res.status(201).json({ success: true, message: 'Charge recorded', data: result });
 });
 
-// ─── Legacy pay ───────────────────────────────────────────────────────────────
-
+// ─── Legacy pay — DISABLED ────────────────────────────────────────────────────
+//
 // PATCH /api/properties/:propertyId/rents/:id/pay
-// Body: { paymentDate?, paymentMethod?, notes?, paidAmount? }
-// NOTE: Prefer POST /rents/payments for full financial tracking.
-//       This endpoint remains for backward compatibility.
+//
+// This endpoint is permanently disabled. It bypassed the ledger (no LedgerEntry,
+// no Payment record) and is incompatible with accurate financial reporting.
+//
+// Use POST /api/properties/:propertyId/rents/payments instead.
+// That endpoint creates a full audit trail: Payment document + LedgerEntry credit.
 const markRentAsPaid = asyncHandler(async (req, res) => {
-  const property = await verifyOwnership(req.params.propertyId, req.user._id);
-  if (!property) {
-    return res.status(404).json({ success: false, message: 'Property not found' });
-  }
-
-  const existing = await RentPayment.findOne({
-    _id:      req.params.id,
-    property: req.params.propertyId,
+  res.status(410).json({
+    success: false,
+    message:  'This endpoint is disabled. Use POST /rents/payments to record payments with full ledger tracking.',
+    code:     'ENDPOINT_DISABLED',
+    redirect: `/api/properties/${req.params.propertyId}/rents/payments`,
   });
-  if (!existing) {
-    return res.status(404).json({ success: false, message: 'Rent record not found' });
-  }
-
-  const { record, error } = await rentService.markAsPaid(req.params.id, req.body);
-  if (error) {
-    return res.status(400).json({ success: false, message: error });
-  }
-
-  res.json({ success: true, message: 'Rent marked as paid', data: record });
 });
 
 module.exports = {
@@ -259,6 +287,7 @@ module.exports = {
   getOverdueRents,
   getTenantRentHistory,
   recordPayment,
+  reversePayment,
   getTenantLedger,
   addManualCharge,
   markRentAsPaid,

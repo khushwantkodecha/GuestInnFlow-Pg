@@ -8,7 +8,7 @@
  */
 
 const cron = require('node-cron');
-const { runDailyReminders } = require('./reminderService');
+const { runDailyReminders, retryFailedReminders } = require('./reminderService');
 
 const logger = {
   info:  (event, meta = {}) =>
@@ -34,6 +34,24 @@ const startReminderScheduler = () => {
   );
 
   logger.info('cron.reminders.scheduled', { schedule: '0 9 * * * (daily 09:00 IST)' });
+
+  // Retry failed reminders at 10:00 IST — 1 hour after the main run.
+  // Finds failed logs from the last 24 h with retryCount < 3 and re-attempts delivery.
+  cron.schedule(
+    '0 10 * * *',
+    async () => {
+      logger.info('cron.reminders_retry.started');
+      try {
+        const stats = await retryFailedReminders();
+        logger.info('cron.reminders_retry.completed', stats);
+      } catch (err) {
+        logger.error('cron.reminders_retry.failed', { error: err.message });
+      }
+    },
+    { scheduled: true, timezone: 'Asia/Kolkata' }
+  );
+
+  logger.info('cron.reminders_retry.scheduled', { schedule: '0 10 * * * (daily 10:00 IST)' });
 };
 
 module.exports = { startReminderScheduler };

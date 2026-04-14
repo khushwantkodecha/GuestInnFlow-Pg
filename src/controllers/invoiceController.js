@@ -1,10 +1,32 @@
-const Property    = require('../models/Property');
-const Invoice     = require('../models/Invoice');
-const Tenant      = require('../models/Tenant');
-const Room        = require('../models/Room');
-const Bed         = require('../models/Bed');
-const asyncHandler = require('../utils/asyncHandler');
+const Property       = require('../models/Property');
+const Invoice        = require('../models/Invoice');
+const Tenant         = require('../models/Tenant');
+const Room           = require('../models/Room');
+const Bed            = require('../models/Bed');
+const asyncHandler   = require('../utils/asyncHandler');
 const invoiceService = require('../services/invoiceService');
+
+// Shared pre-stream validation for PDF generation.
+// Must be called BEFORE generateInvoicePdf — once doc.pipe(res) fires, headers
+// are sent and we can no longer return a JSON error response.
+const validatePdfPrereqs = (invoice, tenant, res) => {
+  if (invoice.status === 'void') {
+    res.status(410).json({
+      success: false,
+      message: 'This invoice has been voided and cannot be downloaded.',
+      code:    'INVOICE_VOIDED',
+    });
+    return false;
+  }
+  if (!tenant) {
+    res.status(404).json({
+      success: false,
+      message: 'Tenant record not found — PDF cannot be generated.',
+    });
+    return false;
+  }
+  return true;
+};
 
 const verifyOwnership = async (propertyId, userId) =>
   Property.findOne({ _id: propertyId, owner: userId, isActive: true });
@@ -79,7 +101,20 @@ const downloadInvoicePdf = asyncHandler(async (req, res) => {
     invoice.bed  ? Bed.findById(invoice.bed).select('bedNumber').lean()          : null,
   ]);
 
-  invoiceService.generateInvoicePdf(invoice, property, tenant ?? {}, room, bed, res);
+  // Validate before streaming — once headers are sent we cannot return JSON errors
+  if (!validatePdfPrereqs(invoice, tenant, res)) return;
+
+  // Synchronous errors (e.g. bad invoice data before pipe starts) are caught here.
+  // Errors that occur after doc.pipe(res) are handled by the doc 'error' event
+  // listener inside generateInvoicePdf.
+  try {
+    invoiceService.generateInvoicePdf(invoice, property, tenant, room, bed, res);
+  } catch (err) {
+    if (!res.headersSent) {
+      return res.status(500).json({ success: false, message: 'PDF generation failed' });
+    }
+    if (!res.writableEnded) res.end();
+  }
 });
 
 // ─── Share Message ────────────────────────────────────────────────────────────
@@ -145,10 +180,33 @@ const generateInvoicesManual = asyncHandler(async (req, res) => {
   });
 });
 
+// ─── Void ─────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/properties/:propertyId/invoices/:id/void
+ *
+ * Marks an invoice as void. Void invoices:
+ *  - Are excluded from all payment sync operations.
+ *  - Cannot be downloaded as PDF.
+ *  - Cannot be voided again.
+ *  - Cannot be voided if already paid (use payment reversal first).
+ *
+ * Body: { reason? } — optional human-readable reason (not persisted; for audit logging only).
+ */
+const voidInvoiceHandler = asyncHandler(async (req, res) => {
+  const property = await verifyOwnership(req.params.propertyId, req.user._id);
+  if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
+
+  const invoice = await invoiceService.voidInvoice(req.params.propertyId, req.params.id);
+
+  res.json({ success: true, message: 'Invoice voided', data: invoice });
+});
+
 module.exports = {
   getInvoices,
   getInvoice,
   downloadInvoicePdf,
   getInvoiceShareMessage,
   generateInvoicesManual,
+  voidInvoiceHandler,
 };

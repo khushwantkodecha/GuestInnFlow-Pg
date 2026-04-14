@@ -13,7 +13,6 @@ import { getTenants, getTenant, searchTenants as searchTenantsApi, createTenant,
 import { getTenantLedger, recordPayment, addCharge } from '../api/rent'
 import { getInvoices, getInvoicePdfUrl } from '../api/invoices'
 import { getReminderLogs } from '../api/reminders'
-import { getRooms, getBeds } from '../api/rooms'
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
 import { useToast } from '../context/ToastContext'
@@ -273,7 +272,6 @@ const BulkBar = ({ count, onReminder, onVacate, onExport, onClear }) => (
 const EMPTY_FORM = {
   name: '', email: '', phone: '', aadharNumber: '',
   checkInDate: '', rentAmount: '', depositAmount: '', dueDate: 5,
-  selectedRoomId: '', bedId: '',
 }
 
 const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
@@ -284,22 +282,6 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
   const [phoneConflict, setPhoneConflict]   = useState(null)
   const [phoneChecking, setPhoneChecking]   = useState(false)
   const phoneDebounceRef                    = useRef(null)
-
-  // Fetch rooms for bed assignment
-  const { data: roomData } = useApi(() => getRooms(propertyId), [propertyId])
-  const rooms = roomData?.data ?? []
-
-  // Fetch vacant beds when a room is selected
-  const [vacantBeds, setVacantBeds] = useState([])
-  const [bedsLoading, setBedsLoading] = useState(false)
-
-  useEffect(() => {
-    if (!form.selectedRoomId) { setVacantBeds([]); set('bedId', ''); return }
-    setBedsLoading(true)
-    getBeds(propertyId, form.selectedRoomId)
-      .then((res) => setVacantBeds((res.data?.data ?? []).filter((b) => b.status === 'vacant')))
-      .finally(() => setBedsLoading(false))
-  }, [form.selectedRoomId]) // eslint-disable-line
 
   const handlePhoneChange = (val) => {
     set('phone', val)
@@ -322,13 +304,11 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
   const handleSubmit = (e) => {
     e.preventDefault()
     if (phoneConflict) return
-    const { selectedRoomId, ...rest } = form
     onSubmit({
-      ...rest,
-      rentAmount:    Number(rest.rentAmount),
-      depositAmount: Number(rest.depositAmount) || 0,
-      dueDate:       Number(rest.dueDate),
-      bedId:         rest.bedId || undefined,
+      ...form,
+      rentAmount:    Number(form.rentAmount),
+      depositAmount: Number(form.depositAmount) || 0,
+      dueDate:       Number(form.dueDate),
     })
   }
 
@@ -408,36 +388,9 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
         </div>
       </div>
 
-      {/* Bed assignment */}
-      <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">
-          Assign Bed <span className="text-slate-300 font-normal normal-case tracking-normal">(optional)</span>
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Room</label>
-            <select className="input" value={form.selectedRoomId}
-              onChange={(e) => { set('selectedRoomId', e.target.value); set('bedId', '') }}>
-              <option value="">Select room…</option>
-              {rooms.map((r) => (
-                <option key={r._id} value={r._id}>Room {r.roomNumber} ({r.type})</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">Vacant Bed</label>
-            <select className="input" value={form.bedId} onChange={(e) => set('bedId', e.target.value)}
-              disabled={!form.selectedRoomId || bedsLoading}>
-              <option value="">{bedsLoading ? 'Loading…' : 'Select bed…'}</option>
-              {vacantBeds.map((b) => (
-                <option key={b._id} value={b._id}>Bed {b.bedNumber}</option>
-              ))}
-            </select>
-            {form.selectedRoomId && !bedsLoading && vacantBeds.length === 0 && (
-              <p className="mt-1 text-xs text-amber-600">No vacant beds in this room</p>
-            )}
-          </div>
-        </div>
+      {/* Bed assignment note */}
+      <div className="rounded-lg bg-blue-50 border border-blue-100 px-3 py-2.5 text-xs text-blue-700">
+        Bed assignment happens from the <strong>Rooms &amp; Beds</strong> page. Use &ldquo;Assign Tenant&rdquo; on a vacant bed after creating the tenant here.
       </div>
 
       <div className="flex gap-2 pt-1 border-t border-slate-100">
@@ -1492,6 +1445,24 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
               <Field label="End Date"      value={fdate(t.checkOutDate)} />
               <Field label="Monthly Rent"  value={fmt(t.rentAmount)} />
               <Field label="Deposit"       value={fmt(t.depositAmount)} />
+              {/* billingStartDate is the immutable anchor for all billing cycles.
+                  It is set once at first assignment and never changes on re-assignment.
+                  If it differs from checkInDate it means the tenant was re-assigned. */}
+              {t.billingStartDate && (
+                <Field
+                  label="Billing Anchor"
+                  value={
+                    <span className="flex items-center gap-1.5">
+                      {fdate(t.billingStartDate)}
+                      {t.checkInDate && new Date(t.billingStartDate).toDateString() !== new Date(t.checkInDate).toDateString() && (
+                        <span className="inline-flex items-center text-[10px] font-semibold bg-amber-50 border border-amber-200 text-amber-700 rounded-full px-1.5 py-0.5">
+                          re-assigned
+                        </span>
+                      )}
+                    </span>
+                  }
+                />
+              )}
               {(() => {
                 const cycle = computeBillingCycle(t)
                 if (!cycle) return <Field label="Billing Cycle" value={null} />
@@ -2730,7 +2701,7 @@ const Tenants = () => {
 
       {/* ── Add Tenant Modal ── */}
       {showAdd && (
-        <Modal title="Add Tenant" onClose={() => setShowAdd(false)}>
+        <Modal title="Add Tenant" onClose={() => setShowAdd(false)} disableBackdropClose>
           <AddTenantForm
             propertyId={propertyId}
             onSubmit={handleAdd}

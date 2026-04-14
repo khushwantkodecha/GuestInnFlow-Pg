@@ -94,15 +94,35 @@ const expenseSchema = new mongoose.Schema(
       type: Boolean,
       default: true,   // set false to pause without deleting
     },
+
+    // ── Attachment ────────────────────────────────────────────────────────────
+    // URL to a receipt image or scanned invoice (S3, Cloudinary, etc.)
+    attachmentUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    // ── Soft delete ───────────────────────────────────────────────────────────
+    // Records are never hard-deleted — isDeleted:true hides them from all reads.
+    // deletedAt is kept for audit purposes.
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
-expenseSchema.index({ property: 1, date: -1 });
+expenseSchema.index({ property: 1, date: -1, isDeleted: 1 });
 expenseSchema.index({ property: 1, type: 1, date: -1 });
-expenseSchema.index({ property: 1, status: 1 });
-expenseSchema.index({ isRecurring: 1, recurringNextRun: 1, isRecurringActive: 1 }); // cron
+expenseSchema.index({ property: 1, status: 1, isDeleted: 1 });
+expenseSchema.index({ isRecurring: 1, recurringNextRun: 1, isRecurringActive: 1, isDeleted: 1 }); // cron
 
 module.exports = mongoose.model('Expense', expenseSchema);
 module.exports.EXPENSE_CATEGORIES = EXPENSE_CATEGORIES;

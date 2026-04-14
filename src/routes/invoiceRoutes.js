@@ -5,6 +5,7 @@ const {
   downloadInvoicePdf,
   getInvoiceShareMessage,
   generateInvoicesManual,
+  voidInvoiceHandler,
 } = require('../controllers/invoiceController');
 const { protect } = require('../middleware/auth');
 
@@ -20,8 +21,9 @@ router.post('/generate', generateInvoicesManual);
 router.get('/', getInvoices);
 
 // Single invoice + actions
-router.get('/:id',       getInvoice);
-router.get('/:id/pdf',   downloadInvoicePdf);
-router.get('/:id/share', getInvoiceShareMessage);
+router.get( '/:id',        getInvoice);
+router.get( '/:id/pdf',    downloadInvoicePdf);
+router.get( '/:id/share',  getInvoiceShareMessage);
+router.post('/:id/void',   voidInvoiceHandler);
 
 module.exports = router;

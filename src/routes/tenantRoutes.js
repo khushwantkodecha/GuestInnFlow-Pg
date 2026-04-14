@@ -3,6 +3,7 @@ const {
   searchTenants, getTenants, getTenant, createTenant, updateTenant, vacateTenant,
   getTenantAdvance, applyTenantAdvance, refundTenantAdvance,
   adjustDeposit, refundDeposit,
+  fixBillingStart,
 } = require('../controllers/tenantController');
 const { getTenantRentHistory } = require('../controllers/rentController');
 const { mergeTenants } = require('../controllers/mergeTenantController');
@@ -30,5 +31,8 @@ router.post('/:tenantId/advance/refund', refundTenantAdvance);
 // Security deposit
 router.post('/:tenantId/deposit/adjust', adjustDeposit);
 router.post('/:tenantId/deposit/refund', refundDeposit);
+
+// Billing start correction (admin escape hatch for immutable billingStartDate)
+router.patch('/:id/fix-billing-start', fixBillingStart);
 
 module.exports = router;

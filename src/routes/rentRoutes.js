@@ -6,6 +6,7 @@ const {
   getOverdueRents,
   getTenantRentHistory,
   recordPayment,
+  reversePayment,
   getTenantLedger,
   addManualCharge,
   markRentAsPaid,
@@ -27,7 +28,8 @@ router.get( '/tenants/:tenantId/ledger', getTenantLedger);
 router.post('/tenants/:tenantId/charge', addManualCharge);
 
 // Payments (full financial tracking — preferred over PATCH /:id/pay)
-router.post('/payments', recordPayment);
+router.post('/payments',            recordPayment);
+router.post('/payments/:id/reverse', reversePayment);
 
 // Rent record CRUD
 router.route('/').get(getAllRents);

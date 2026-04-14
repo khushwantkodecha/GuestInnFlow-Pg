@@ -14,13 +14,11 @@ const InvoiceCounter = require('../models/InvoiceCounter');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const MONTH_NAMES = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December',
-];
 
 const fmt = (n) => `Rs.${(n ?? 0).toLocaleString('en-IN')}`;
 
+// Exported so the reconciliation scheduler and rentService can reuse it
+// without duplicating the logic.
 const deriveStatus = (paidAmount, totalAmount) => {
   if (paidAmount >= totalAmount) return 'paid';
   if (paidAmount > 0)            return 'partial';
@@ -99,21 +97,131 @@ const generateInvoices = async (propertyId, rentRecords) => {
 /**
  * syncInvoiceWithPayment
  *
- * Called after allocatePayment updates a RentPayment.
+ * Called after allocatePayment (or reversePayment) updates a RentPayment.
  * Finds the linked Invoice and updates paidAmount, balance, status.
+ *
+ * Void invoices are never updated — they are intentionally closed.
+ *
+ * Note: totalAmount is NOT used to override invoice.totalAmount — the invoice
+ * may carry additionalCharges that exceed the bare RentPayment.amount.
+ * Only paidAmount (from the RentPayment) is authoritative here; balance and
+ * status are re-derived from the invoice's own totalAmount.
  *
  * @param {string} rentRecordId   — RentPayment._id
  * @param {number} newPaidAmount  — cumulative paidAmount on the RentPayment
- * @param {number} totalAmount    — RentPayment.amount (never changes)
+ * @param {number} totalAmount    — RentPayment.amount (used only when no invoice
+ *                                  exists to check against additionalCharges)
  */
-const syncInvoiceWithPayment = async (rentRecordId, newPaidAmount, totalAmount) => {
+const syncInvoiceWithPayment = async (rentRecordId, newPaidAmount, _totalAmount) => {
   const invoice = await Invoice.findOne({ rentRecord: rentRecordId });
   if (!invoice) return;
 
+  // Never modify a voided invoice — it is intentionally closed.
+  if (invoice.status === 'void') return;
+
   invoice.paidAmount = newPaidAmount;
-  invoice.balance    = Math.max(0, totalAmount - newPaidAmount);
-  invoice.status     = deriveStatus(newPaidAmount, totalAmount);
+  // Use invoice.totalAmount (not the raw RentPayment.amount) so additionalCharges
+  // from manual charges are included in the balance calculation.
+  invoice.balance    = Math.max(0, invoice.totalAmount - newPaidAmount);
+  invoice.status     = deriveStatus(newPaidAmount, invoice.totalAmount);
   await invoice.save();
+};
+
+// ─── Void ─────────────────────────────────────────────────────────────────────
+
+/**
+ * voidInvoice
+ *
+ * Marks an invoice as void. Void invoices:
+ *  - Are excluded from payment sync (syncInvoiceWithPayment is a no-op on them).
+ *  - Cannot be voided again.
+ *  - Cannot be voided if already paid (paid invoices are financial records).
+ *
+ * Voiding does NOT reverse the linked RentPayment or write any LedgerEntry.
+ * It is a display/reporting action only — use payment reversal to undo money.
+ *
+ * @param {string} propertyId
+ * @param {string} invoiceId
+ * @returns {Invoice}
+ */
+const voidInvoice = async (propertyId, invoiceId) => {
+  const invoice = await Invoice.findOne({ _id: invoiceId, property: propertyId });
+  if (!invoice) {
+    throw Object.assign(new Error('Invoice not found'), { statusCode: 404 });
+  }
+  if (invoice.status === 'paid') {
+    throw Object.assign(
+      new Error('Cannot void a paid invoice. Use payment reversal to undo the payment first.'),
+      { statusCode: 409 }
+    );
+  }
+  if (invoice.status === 'void') {
+    throw Object.assign(new Error('Invoice is already void'), { statusCode: 409 });
+  }
+
+  invoice.status = 'void';
+  await invoice.save();
+  return invoice;
+};
+
+// ─── Charge Attachment ────────────────────────────────────────────────────────
+
+/**
+ * attachChargeToInvoice
+ *
+ * Links a manual charge to the most relevant open invoice for the tenant,
+ * and adds the charge amount to invoice.additionalCharges.
+ *
+ * Selection order:
+ *  1. Invoice for the same billing period (month/year matching chargeDate).
+ *  2. Most recently issued open invoice for the tenant (fallback).
+ *  3. If no open invoice exists, returns null — the charge is recorded in the
+ *     ledger but not reflected on any invoice.
+ *
+ * Invoice fields updated:
+ *  - additionalCharges += chargeAmount
+ *  - totalAmount = rentAmount + additionalCharges - discount
+ *  - balance = max(0, totalAmount - paidAmount)
+ *  - status re-derived
+ *
+ * @param {string} tenantId
+ * @param {string} propertyId
+ * @param {number} chargeAmount
+ * @param {string|null} chargeDate — ISO date string; used to find matching period
+ * @returns {ObjectId|null} — invoice._id if attached, null otherwise
+ */
+const attachChargeToInvoice = async (tenantId, propertyId, chargeAmount, chargeDate) => {
+  const refDate = chargeDate ? new Date(chargeDate) : new Date();
+  const month   = refDate.getMonth() + 1;
+  const year    = refDate.getFullYear();
+
+  // Prefer invoice for the same billing period
+  let invoice = await Invoice.findOne({
+    tenant:   tenantId,
+    property: propertyId,
+    month,
+    year,
+    status:   { $in: ['unpaid', 'partial'] },
+  });
+
+  // Fall back to most recently issued open invoice
+  if (!invoice) {
+    invoice = await Invoice.findOne({
+      tenant:   tenantId,
+      property: propertyId,
+      status:   { $in: ['unpaid', 'partial'] },
+    }).sort({ issuedAt: -1 });
+  }
+
+  if (!invoice) return null; // no open invoice to attach to
+
+  invoice.additionalCharges  = (invoice.additionalCharges ?? 0) + chargeAmount;
+  invoice.totalAmount        = invoice.rentAmount + invoice.additionalCharges - (invoice.discount ?? 0);
+  invoice.balance            = Math.max(0, invoice.totalAmount - invoice.paidAmount);
+  invoice.status             = deriveStatus(invoice.paidAmount, invoice.totalAmount);
+  await invoice.save();
+
+  return invoice._id;
 };
 
 // ─── PDF ──────────────────────────────────────────────────────────────────────
@@ -132,6 +240,20 @@ const syncInvoiceWithPayment = async (rentRecordId, newPaidAmount, totalAmount) 
  */
 const generateInvoicePdf = (invoice, property, tenant, room, bed, res) => {
   const doc = new PDFDocument({ size: 'A4', margin: 0 });
+
+  // Attach error handler BEFORE piping — if layout code throws after the stream
+  // has started, we can't send a JSON response (headers already sent), but we
+  // can log the error and terminate the stream cleanly so the client isn't left
+  // hanging with a partial download.
+  doc.on('error', (err) => {
+    console.error(JSON.stringify({
+      level: 'error', ts: new Date().toISOString(),
+      event: 'pdf.generation.stream_error',
+      invoiceId: invoice._id?.toString(),
+      error: err.message,
+    }));
+    if (!res.writableEnded) res.end();
+  });
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader(
@@ -397,9 +519,37 @@ const getShareMessage = (invoice, tenant, property) => {
   ].filter((l) => l !== undefined).join('\n');
 };
 
+// ─── Vacate Sync ──────────────────────────────────────────────────────────────
+
+/**
+ * syncTenantInvoicesOnVacate
+ *
+ * Called post-commit after a tenant vacates. Re-syncs every invoice for the
+ * tenant against its linked RentPayment record's current paidAmount so that
+ * all invoices reflect the final settlement state (paid / partial / unpaid).
+ *
+ * This is best-effort — a failure here does not roll back the vacate.
+ *
+ * @param {string|ObjectId} tenantId
+ */
+const syncTenantInvoicesOnVacate = async (tenantId) => {
+  // Lazy-require to avoid circular dependency (invoiceService ← rentService ← invoiceService)
+  const RentPayment = require('../models/RentPayment');
+  const records = await RentPayment.find({ tenant: tenantId }).lean();
+  for (const record of records) {
+    try {
+      await syncInvoiceWithPayment(record._id, record.paidAmount ?? 0, record.amount);
+    } catch (_) { /* non-fatal per record */ }
+  }
+};
+
 module.exports = {
+  deriveStatus,
   generateInvoices,
   syncInvoiceWithPayment,
+  syncTenantInvoicesOnVacate,
+  voidInvoice,
+  attachChargeToInvoice,
   generateInvoicePdf,
   getShareMessage,
 };

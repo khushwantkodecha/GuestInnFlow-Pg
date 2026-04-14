@@ -59,7 +59,10 @@ const ledgerEntrySchema = new mongoose.Schema(
         'deposit_collected',       // audit-only: security deposit received
         'deposit_adjusted',        // credit: deposit applied against outstanding dues
         'deposit_refunded',        // credit: deposit returned to tenant at vacate
-        'deposit_forfeited',       // debit: deposit forfeited at vacate
+        'deposit_forfeited',       // credit: deposit forfeited at vacate (audit-only)
+        'advance_refunded',        // debit: overpaid advance credit refunded to tenant at vacate
+        'billing_start_corrected', // credit, amount=0: admin correction of billingStartDate (audit-only)
+        'payment_reversal',        // debit: reversal of a previously recorded payment
         // ── Legacy names (kept for backward compatibility with existing records) ──
         'rent_record',
         'payment',

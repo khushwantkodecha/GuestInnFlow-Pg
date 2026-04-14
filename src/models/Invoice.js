@@ -40,14 +40,14 @@ const invoiceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'RentPayment',
       required: true,
-      index: true,
+      // index defined below with unique: true — do not add index: true here
     },
 
     // ── Identifying info ────────────────────────────────────────────────────
     invoiceNumber: {
       type: String,
       required: true,
-      index: true,
+      // index defined below with unique: true — do not add index: true here
     },
 
     // ── Billing period ──────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ const invoiceSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['unpaid', 'partial', 'paid'],
+      enum: ['unpaid', 'partial', 'paid', 'void'],
       default: 'unpaid',
     },
 
@@ -81,6 +81,9 @@ const invoiceSchema = new mongoose.Schema(
 
 // One invoice per rent record (guarantees no duplicate generation)
 invoiceSchema.index({ rentRecord: 1 }, { unique: true });
+
+// Invoice number must be globally unique (guards against counter bugs or manual edits)
+invoiceSchema.index({ invoiceNumber: 1 }, { unique: true });
 
 // Property-level listing queries
 invoiceSchema.index({ property: 1, year: 1, month: 1 });

@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Navbar from './Navbar'
+import BottomNav from './BottomNav'
 import CommandPalette from '../ui/CommandPalette'
 
 const TITLES = {
@@ -58,10 +59,14 @@ const AppLayout = () => {
 
       {/* Page content */}
       <main className={`${mainOffset} pt-16 transition-all duration-300`}>
-        <div className="p-4 sm:p-6 animate-pageIn" key={pathname}>
+        {/* pb-24 on mobile reserves space above the bottom nav bar */}
+        <div className="p-4 sm:p-6 pb-24 md:pb-6 animate-pageIn" key={pathname}>
           <Outlet />
         </div>
       </main>
+
+      {/* Mobile bottom nav — hidden on md+ */}
+      <BottomNav />
 
       <CommandPalette />
     </div>

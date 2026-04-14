@@ -1,10 +1,12 @@
 const Tenant       = require('../models/Tenant');
 const Bed          = require('../models/Bed');
+const Room         = require('../models/Room');
 const Property     = require('../models/Property');
 const LedgerEntry  = require('../models/LedgerEntry');
 const RentPayment  = require('../models/RentPayment');
 const rentService  = require('../services/rentService');
 const asyncHandler = require('../utils/asyncHandler');
+const { vacateBedCore, vacateTenantCore } = require('../services/vacateService');
 
 // ── Shared phone-uniqueness check ────────────────────────────────────────────
 // Returns the conflicting tenant document if an active/notice tenant with the
@@ -153,7 +155,11 @@ const createTenant = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
 
-  const { bedId, ...tenantData } = req.body;
+  // Fix 2: bedId is no longer accepted here. All bed assignments must go through
+  // PATCH /rooms/:roomId/beds/:id/assign so that recalculateRoomRent runs and
+  // the first billing cycle is generated correctly.
+  const tenantData = { ...req.body };
+  delete tenantData.bedId;   // silently strip if caller sends it by mistake
 
   // ── Duplicate phone guard ────────────────────────────────────────────────
   if (tenantData.phone) {
@@ -171,24 +177,7 @@ const createTenant = asyncHandler(async (req, res) => {
     }
   }
 
-  // Validate and assign bed if provided
-  if (bedId) {
-    const bed = await Bed.findById(bedId);
-    if (!bed || !bed.isActive) {
-      return res.status(404).json({ success: false, message: 'Bed not found' });
-    }
-    if (bed.status !== 'vacant') {
-      return res.status(409).json({ success: false, message: `Bed is ${bed.status}. Only vacant beds can be assigned.` });
-    }
-    tenantData.bed = bedId;
-  }
-
   const tenant = await Tenant.create({ ...tenantData, property: req.params.propertyId });
-
-  // Mark bed as occupied
-  if (bedId) {
-    await Bed.findByIdAndUpdate(bedId, { status: 'occupied', tenant: tenant._id });
-  }
 
   res.status(201).json({ success: true, data: tenant });
 });
@@ -228,7 +217,7 @@ const updateTenant = asyncHandler(async (req, res) => {
   let prevTenant = null;
   if (markingDepositPaid) {
     prevTenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId })
-      .select('depositPaid depositAmount ledgerBalance').lean();
+      .select('depositPaid depositAmount').lean();
   }
 
   const tenant = await Tenant.findOneAndUpdate(
@@ -249,7 +238,7 @@ const updateTenant = asyncHandler(async (req, res) => {
         property:      req.params.propertyId,
         type:          'credit',
         amount:        collectedAmt,
-        balanceAfter:  prevTenant.ledgerBalance ?? 0,  // informational — rent balance unchanged
+        balanceAfter:  await rentService.getLastBalance(tenant._id),  // informational — rent balance unchanged
         referenceType: 'deposit_collected',
         referenceId:   tenant._id,
         description:   `Security deposit ₹${collectedAmt} collected (manually marked)`,
@@ -261,6 +250,14 @@ const updateTenant = asyncHandler(async (req, res) => {
 });
 
 // DELETE /api/properties/:propertyId/tenants/:id  — marks as vacated and frees the bed
+//
+// SINGLE VACATE FLOW: delegates entirely to vacateService.vacateBedCore — the same
+// function used by bedController.vacateBed. This guarantees identical behaviour:
+// deposit handling, payment collection, ledger entries, rent recalculation.
+//
+// Body accepts the same params as PATCH /rooms/:roomId/beds/:id/vacate:
+//   checkOutDate, notes, vacateOption, paymentAmount, paymentMethod,
+//   depositAction, refundAmount, refundMethod
 const vacateTenant = asyncHandler(async (req, res) => {
   const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
   if (!property) {
@@ -275,29 +272,103 @@ const vacateTenant = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Tenant is already vacated' });
   }
 
-  const bedRef = tenant.bed;
-
-  tenant.status = 'vacated';
-  tenant.checkOutDate = req.body.checkOutDate ? new Date(req.body.checkOutDate) : new Date();
-  tenant.bed = null;
-  await tenant.save();
-
-  // Free the bed; if it was reserved by this lead, clear the reservation too
-  if (bedRef) {
-    const bedDoc = await Bed.findById(bedRef);
-    if (bedDoc) {
-      const wasReserved = bedDoc.status === 'reserved';
-      bedDoc.status = 'vacant';
-      bedDoc.tenant = null;
-      if (wasReserved || String(bedDoc.reservation?.tenantId) === String(tenant._id)) {
-        bedDoc.reservedTill = null;
-        bedDoc.reservation  = { tenantId: null, name: null, phone: null, moveInDate: null, notes: null, source: 'reserved' };
-      }
-      await bedDoc.save();
+  // ── Case 1: tenant has no bed — tenant-only financial settlement ──────────
+  if (!tenant.bed) {
+    try {
+      const result = await vacateTenantCore({
+        propertyId: req.params.propertyId,
+        tenant,
+        opts:   req.body,
+        userId: req.user._id,
+      });
+      return res.json({ success: true, message: 'Tenant vacated', data: result.tenant });
+    } catch (err) {
+      const status = err.status ?? 500;
+      const code   = err.code   ?? 'VACATE_ERROR';
+      return res.status(status).json({ success: false, message: err.message, code });
     }
   }
 
-  res.json({ success: true, message: 'Tenant vacated', data: tenant });
+  // ── Route through the canonical vacate flow ────────────────────────────────
+  const bed = await Bed.findOne({ _id: tenant.bed, isActive: true });
+
+  // ── Case 2: stale bed reference — bed document missing ────────────────────
+  // vacateTenantCore clears tenant.bed = null inside the transaction.
+  if (!bed) {
+    try {
+      const result = await vacateTenantCore({
+        propertyId: req.params.propertyId,
+        tenant,
+        opts:   req.body,
+        userId: req.user._id,
+      });
+      return res.json({ success: true, message: 'Tenant vacated (stale bed reference cleared)', data: result.tenant });
+    } catch (err) {
+      const status = err.status ?? 500;
+      const code   = err.code   ?? 'VACATE_ERROR';
+      return res.status(status).json({ success: false, message: err.message, code });
+    }
+  }
+
+  // ── Case 3: bed exists but not occupied (e.g. reserved) ───────────────────
+  if (bed.status !== 'occupied') {
+    const room = await Room.findById(bed.room);
+    if (room) {
+      // vacateBedCore frees the bed and recalculates room rent for remaining tenants
+      try {
+        const result = await vacateBedCore({
+          propertyId: req.params.propertyId,
+          room,
+          bed,
+          tenant,
+          opts:   req.body,
+          userId: req.user._id,
+        });
+        return res.json({ success: true, message: 'Tenant vacated', data: result.tenant });
+      } catch (err) {
+        const status = err.status ?? 500;
+        const code   = err.code   ?? 'VACATE_ERROR';
+        return res.status(status).json({ success: false, message: err.message, code });
+      }
+    }
+    // No room found — free the bed directly, then run tenant-only financial settlement
+    await Bed.updateOne({ _id: bed._id }, { $set: { status: 'vacant', tenant: null } });
+    try {
+      const result = await vacateTenantCore({
+        propertyId: req.params.propertyId,
+        tenant,
+        opts:   req.body,
+        userId: req.user._id,
+      });
+      return res.json({ success: true, message: 'Tenant vacated', data: result.tenant });
+    } catch (err) {
+      const status = err.status ?? 500;
+      const code   = err.code   ?? 'VACATE_ERROR';
+      return res.status(status).json({ success: false, message: err.message, code });
+    }
+  }
+
+  // ── Happy path: bed is occupied — full vacate through canonical flow ────────
+  const room = await Room.findById(bed.room);
+  if (!room) {
+    return res.status(500).json({ success: false, message: 'Room record not found for this bed', code: 'ROOM_NOT_FOUND' });
+  }
+
+  try {
+    const result = await vacateBedCore({
+      propertyId: req.params.propertyId,
+      room,
+      bed,
+      tenant,
+      opts:   req.body,
+      userId: req.user._id,
+    });
+    res.json({ success: true, message: 'Tenant vacated', data: result.tenant });
+  } catch (err) {
+    const status = err.status ?? 500;
+    const code   = err.code   ?? 'VACATE_ERROR';
+    res.status(status).json({ success: false, message: err.message, code });
+  }
 });
 
 // ── Reservation advance endpoints ────────────────────────────────────────────
@@ -361,7 +432,7 @@ const applyTenantAdvance = asyncHandler(async (req, res) => {
   const advAmt  = bed.reservation.reservationAmount;
   const advMode = bed.reservation.reservationMode;
 
-  const prevBalance = tenant.ledgerBalance ?? 0;
+  const prevBalance = await rentService.getLastBalance(tenant._id);
   const newBalance  = prevBalance - advAmt;
 
   await LedgerEntry.create({
@@ -405,7 +476,7 @@ const refundTenantAdvance = asyncHandler(async (req, res) => {
   const advAmt  = bed.reservation.reservationAmount;
   const advMode = bed.reservation.reservationMode;
 
-  const prevBalance = tenant.ledgerBalance ?? 0;
+  const prevBalance = await rentService.getLastBalance(tenant._id);
   const newBalance  = prevBalance - advAmt;
 
   await LedgerEntry.create({
@@ -469,14 +540,13 @@ const adjustDeposit = asyncHandler(async (req, res) => {
     { $set: { depositBalance: newBal, depositStatus: newStatus } }
   );
 
-  // Fetch updated balance after allocatePayment updated it
-  const freshTenant = await Tenant.findById(tenant._id).select('ledgerBalance').lean();
+  // Derive balance from LedgerEntry after allocatePayment has written its entry
   await LedgerEntry.create({
     tenant:        tenant._id,
     property:      req.params.propertyId,
     type:          'credit',
     amount:        applyAmt,
-    balanceAfter:  freshTenant?.ledgerBalance ?? 0,
+    balanceAfter:  await rentService.getLastBalance(tenant._id),
     referenceType: 'deposit_adjusted',
     referenceId:   tenant._id,
     description:   `Security deposit ₹${applyAmt} adjusted against outstanding dues`,
@@ -513,7 +583,7 @@ const refundDeposit = asyncHandler(async (req, res) => {
     property:      req.params.propertyId,
     type:          'credit',
     amount:        depositBal,
-    balanceAfter:  tenant.ledgerBalance ?? 0,  // informational — rent balance unchanged
+    balanceAfter:  await rentService.getLastBalance(tenant._id),  // informational — rent balance unchanged
     referenceType: 'deposit_refunded',
     referenceId:   tenant._id,
     description:   `Security deposit ₹${depositBal} refunded to tenant`,
@@ -526,8 +596,62 @@ const refundDeposit = asyncHandler(async (req, res) => {
   });
 });
 
+// PATCH /api/properties/:propertyId/tenants/:id/fix-billing-start
+//
+// Admin-only correction endpoint for the immutable billingStartDate.
+// The normal assignment path sets billingStartDate once and never changes it,
+// but operators sometimes enter the wrong move-in date and have no escape hatch.
+// This endpoint corrects the anchor and writes an audit LedgerEntry so the
+// change is traceable.
+//
+// Body: { billingStartDate: ISO date string, reason?: string }
+const fixBillingStart = asyncHandler(async (req, res) => {
+  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
+
+  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId });
+  if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
+
+  const { billingStartDate, reason } = req.body;
+  if (!billingStartDate) {
+    return res.status(400).json({ success: false, message: 'billingStartDate is required', code: 'MISSING_DATE' });
+  }
+
+  const newDate = new Date(billingStartDate);
+  if (isNaN(newDate.getTime())) {
+    return res.status(400).json({ success: false, message: 'billingStartDate is not a valid date', code: 'INVALID_DATE' });
+  }
+
+  const previousDate = tenant.billingStartDate;
+  tenant.billingStartDate = newDate;
+  tenant.checkInDate      = newDate;   // keep in sync — both anchor billing
+  await tenant.save();
+
+  await LedgerEntry.create({
+    tenant:        tenant._id,
+    property:      req.params.propertyId,
+    type:          'credit',
+    amount:        0,
+    balanceAfter:  await rentService.getLastBalance(tenant._id),
+    referenceType: 'billing_start_corrected',
+    referenceId:   tenant._id,
+    description:   `billingStartDate corrected from ${previousDate ? previousDate.toISOString().slice(0, 10) : 'unset'} → ${newDate.toISOString().slice(0, 10)}${reason ? `. Reason: ${reason}` : ''}`,
+  });
+
+  res.json({
+    success: true,
+    message: 'Billing start date corrected',
+    data: {
+      tenantId:          tenant._id,
+      previousDate:      previousDate ?? null,
+      newBillingStart:   newDate,
+    },
+  });
+});
+
 module.exports = {
   searchTenants, getTenants, getTenant, createTenant, updateTenant, vacateTenant,
   getTenantAdvance, applyTenantAdvance, refundTenantAdvance,
   adjustDeposit, refundDeposit,
+  fixBillingStart,
 };
