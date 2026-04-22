@@ -57,8 +57,6 @@ const AssignTenantModal = ({ room, bed, onClose, onAssignTenant }) => {
     }
     if (onAssignTenant) {
       onAssignTenant(payload)
-    } else {
-      console.log('Assign Tenant:', payload)
     }
   }
 

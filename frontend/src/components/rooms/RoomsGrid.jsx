@@ -70,16 +70,12 @@ const RoomsGrid = ({ rooms = SAMPLE_ROOMS, onAssignTenant }) => {
   const handleBedClick = (bed, room) => {
     if (bed.status === 'vacant') {
       setModalData({ room, bed })
-    } else {
-      console.log('Bed clicked:', bed)
     }
   }
 
   const handleAssign = (data) => {
     if (onAssignTenant) {
       onAssignTenant(data)
-    } else {
-      console.log('Assign Tenant:', data)
     }
     setModalData(null)
   }

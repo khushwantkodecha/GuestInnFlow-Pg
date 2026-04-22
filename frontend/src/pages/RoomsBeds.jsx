@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   Plus, BedDouble, Home, Users, Search, X,
   MoreVertical, Pencil, Trash2, Power, RotateCcw,
   Snowflake, Bath, StickyNote, Crown, FileText, SlidersHorizontal, Sparkles,
   UserPlus, CalendarClock, LogOut, Phone,
   IndianRupee, Calendar, AlertTriangle, Ban, Unlock,
-  Lock, ArrowRightLeft, CheckCircle2,
+  Lock, ArrowRightLeft, CheckCircle2, Eye, EyeOff, ChevronDown,
+  Building2, ChevronRight, Shield,
 } from 'lucide-react'
 import {
   getRooms, createRoom, updateRoom, deleteRoom, getBeds,
@@ -14,11 +16,11 @@ import {
   reserveBed as reserveBedApi, cancelReservation as cancelReservationApi,
   blockBed as blockBedApi, unblockBed as unblockBedApi,
   changeBed as changeBedApi, moveReservation as moveReservationApi,
-  deleteBed as deleteBedApi, createExtraBed,
+  deleteBed as deleteBedApi, createExtraBed, updateExtraBedSettings as updateExtraBedSettingsApi,
   rentPreview as rentPreviewApi, getRoomActivity,
   midStayDepositAdjust as midStayDepositAdjustApi,
 } from '../api/rooms'
-import { getTenants, getTenant, searchTenants as searchTenantsApi, createTenant as createTenantApi } from '../api/tenants'
+import { getTenants, getTenant, searchTenants as searchTenantsApi, createTenant as createTenantApi, updateTenant as updateTenantApi } from '../api/tenants'
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
 import { useToast } from '../context/ToastContext'
@@ -42,7 +44,6 @@ const BED_STATUS = {
 // Maps calculateRent() source tokens to display strings used throughout the UI.
 const SOURCE_LABELS = {
   per_bed:        'Fixed per bed',
-  per_room_split: 'Split by occupancy',
   override:       'Manual override',
   extra_custom:   'Extra bed custom',
   extra_fallback: 'Extra bed default',
@@ -57,7 +58,7 @@ const DEBUG_RENT = false
 // ══════════════════════════════════════════════════════════════════════════════
 //  DropdownMenu — 3-dot menu with click-outside close
 // ══════════════════════════════════════════════════════════════════════════════
-const DropdownMenu = ({ items }) => {
+const DropdownMenu = ({ items, testid }) => {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -75,6 +76,7 @@ const DropdownMenu = ({ items }) => {
         onClick={(e) => { e.stopPropagation(); setOpen(v => !v) }}
         className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-all duration-150 active:scale-90"
         aria-label="Room menu"
+        data-testid={testid ?? 'room-menu-btn'}
       >
         <MoreVertical size={15} />
       </button>
@@ -88,6 +90,7 @@ const DropdownMenu = ({ items }) => {
               <button
                 type="button"
                 disabled={disabled}
+                data-testid={`menu-${label.toLowerCase().replace(/\s+/g, '-')}`}
                 onClick={(e) => { e.stopPropagation(); if (!disabled) { setOpen(false); onClick?.() } }}
                 className={`flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] font-medium transition-colors duration-100
                   ${disabled
@@ -140,7 +143,7 @@ const BED_SCHEME = {
 // Detect touch-only devices once at module level (no hover capability)
 const IS_TOUCH_DEVICE = typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches
 
-const BedCard = React.memo(function BedCard({ bed, onClick, disabled, isLoading = false, index = 0, compact = false }) {
+const BedCard = React.memo(function BedCard({ bed, onClick, disabled, isLoading = false, index = 0, compact = false, dimmed = false, noClick = false }) {
   const [hovered, setHovered]   = useState(false)
   const [pressed, setPressed]   = useState(false)
   const [ripple,  setRipple]    = useState(false)
@@ -220,8 +223,11 @@ const BedCard = React.memo(function BedCard({ bed, onClick, disabled, isLoading 
 
   return (
     <div
-      className="relative"
-      onMouseEnter={() => !disabled && setHovered(true)}
+      className={[
+        'relative transition-all duration-300',
+        dimmed ? 'opacity-30 grayscale-[0.2] pointer-events-none scale-[0.97]' : '',
+      ].join(' ')}
+      onMouseEnter={() => !disabled && !dimmed && setHovered(true)}
       onMouseLeave={() => { setHovered(false); setPressed(false) }}
     >
       {/* ── Tooltip (occupied only, above card, pointer devices) ── */}
@@ -239,28 +245,30 @@ const BedCard = React.memo(function BedCard({ bed, onClick, disabled, isLoading 
 
       {/* ── Card ── */}
       <div
-        role="button"
-        tabIndex={disabled ? -1 : 0}
-        onClick={() => fire(null)}
-        onMouseDown={() => !disabled && setPressed(true)}
-        onMouseUp={() => setPressed(false)}
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        onTouchCancel={handleTouchEnd}
-        onKeyDown={(e) => e.key === 'Enter' && fire(null)}
+        role={noClick ? undefined : 'button'}
+        tabIndex={disabled || noClick ? -1 : 0}
+        data-testid={`bed-card-${bed.bedNumber}`}
+        data-bed-status={bed.status}
+        onClick={noClick ? undefined : () => fire(null)}
+        onMouseDown={noClick ? undefined : () => !disabled && setPressed(true)}
+        onMouseUp={noClick ? undefined : () => setPressed(false)}
+        onTouchStart={noClick ? undefined : handleTouchStart}
+        onTouchEnd={noClick ? undefined : handleTouchEnd}
+        onTouchCancel={noClick ? undefined : handleTouchEnd}
+        onKeyDown={noClick ? undefined : (e) => e.key === 'Enter' && fire(null)}
         style={{ animationDelay: `${index * 40}ms`, animationFillMode: 'both' }}
         className={[
           'relative flex flex-col rounded-2xl border-2 select-none overflow-hidden',
           'transition-all duration-300 ease-out outline-none',
-          'focus-visible:ring-2 focus-visible:ring-primary-400/50',
           'animate-bedIn',
           compact ? 'p-2.5 gap-1.5 min-h-[76px]' : 'p-3 gap-2 min-h-[96px]',
           scheme.bg,
           isExtra ? `border-dashed ${scheme.border}` : scheme.border,
+          noClick   ? 'shadow-sm cursor-default' :
           disabled  ? 'opacity-40 cursor-not-allowed' :
           pressed   ? 'scale-[0.95] shadow-sm cursor-pointer' :
-          hovered   ? 'scale-[1.04] shadow-xl -translate-y-0.5 cursor-pointer' :
-                      'shadow-sm cursor-pointer',
+          hovered   ? 'scale-[1.04] shadow-xl -translate-y-0.5 cursor-pointer transition-all focus-visible:ring-2 focus-visible:ring-primary-400/50' :
+                      'shadow-sm cursor-pointer transition-all focus-visible:ring-2 focus-visible:ring-primary-400/50',
         ].join(' ')}
       >
         {/* Click ripple overlay */}
@@ -297,7 +305,10 @@ const BedCard = React.memo(function BedCard({ bed, onClick, disabled, isLoading 
         )}
 
         {/* Incomplete profile dot (top-right, offset from status dot) */}
-        {isOccupied && bed.tenant?.profileStatus !== 'complete' && (
+        {isOccupied && (() => {
+          const c = bed.tenant?.profileCompletion
+          return c ? c.missing.length > 0 : bed.tenant?.profileStatus !== 'complete'
+        })() && (
           <span className="absolute top-2 right-6 h-3 w-3 rounded-full bg-amber-400 border-2 border-white z-10 flex items-center justify-center">
             <AlertTriangle size={6} className="text-white" />
           </span>
@@ -331,27 +342,6 @@ const BedCard = React.memo(function BedCard({ bed, onClick, disabled, isLoading 
           </span>
         )}
 
-        {/* Quick action buttons — each fires with its own action label */}
-        {!disabled && !isBlocked && quickActions.length > 0 && (
-          <div className={[
-            'absolute inset-x-0 bottom-0 flex gap-1 px-1.5 pb-1.5 pt-3',
-            'transition-all duration-200',
-            showActions ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none',
-          ].join(' ')}
-            style={{ background: `linear-gradient(to top, ${isVacant ? '#f0fdf4' : isOccupied ? '#fff1f2' : '#fefce8'} 60%, transparent)` }}
-          >
-            {quickActions.map(label => (
-              <button
-                key={label}
-                type="button"
-                onClick={(e) => { e.stopPropagation(); fire(label) }}
-                className={`flex-1 rounded-lg py-1 text-[9px] font-bold bg-white/70 backdrop-blur-sm border border-white/80 transition-all duration-100 active:scale-95 ${scheme.actions}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
@@ -360,7 +350,7 @@ const BedCard = React.memo(function BedCard({ bed, onClick, disabled, isLoading 
 // ══════════════════════════════════════════════════════════════════════════════
 //  BedGrid — responsive layout + smart state banners
 // ══════════════════════════════════════════════════════════════════════════════
-const BedGrid = ({ normalBeds = [], extraBeds = [], room, onBedClick, disabled, loading, compact = false, loadingBedId = null }) => {
+const BedGrid = ({ normalBeds = [], extraBeds = [], room, onBedClick, disabled, loading, compact = false, loadingBedId = null, bedFilter = null, noClickStatuses = [] }) => {
   const allBeds     = [...normalBeds, ...extraBeds]
   const totalNormal = normalBeds.length
   const allFull     = totalNormal > 0 && normalBeds.every(b => b.status === 'occupied') && extraBeds.every(b => b.status === 'occupied' || b.status === 'reserved')
@@ -416,6 +406,8 @@ const BedGrid = ({ normalBeds = [], extraBeds = [], room, onBedClick, disabled, 
         {normalBeds.map((bed, i) => (
           <BedCard key={bed._id} bed={bed} index={i} disabled={disabled} compact={compact}
             isLoading={loadingBedId === bed._id}
+            dimmed={bedFilter ? !bedFilter.highlightStatuses.includes(bed.status) : false}
+            noClick={noClickStatuses.includes(bed.status)}
             onClick={onBedClick} />
         ))}
       </div>
@@ -432,6 +424,8 @@ const BedGrid = ({ normalBeds = [], extraBeds = [], room, onBedClick, disabled, 
             {extraBeds.map((bed, i) => (
               <BedCard key={bed._id} bed={bed} index={normalBeds.length + i} disabled={disabled} compact={compact}
                 isLoading={loadingBedId === bed._id}
+                dimmed={bedFilter ? !bedFilter.highlightStatuses.includes(bed.status) : false}
+                noClick={noClickStatuses.includes(bed.status)}
                 onClick={onBedClick} />
             ))}
           </div>
@@ -489,7 +483,7 @@ const BED_GRID_STYLES = `
 // ══════════════════════════════════════════════════════════════════════════════
 //  RoomCard
 // ══════════════════════════════════════════════════════════════════════════════
-const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDeleteRoom, onToggleActive, onReactivate, onAddExtraBed, onRoomClick, loadingBedId = null, refreshKey = 0 }) => {
+const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDeleteRoom, onToggleActive, onReactivate, onAddExtraBed, onRoomClick, loadingBedId = null, refreshKey = 0, bedFilter = null, roomMatches = true }) => {
   const { data, loading, refetch } = useApi(
     () => getBeds(propertyId, room._id),
     [propertyId, room._id, refreshKey]
@@ -504,7 +498,11 @@ const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDe
   const total             = beds.length
   const normalTotal       = normalBeds.length
   const pct               = normalTotal > 0 ? Math.round((normalBeds.filter(b => b.status === 'occupied').length / normalTotal) * 100) : 0
-  const incompleteCount   = beds.filter(b => b.status === 'occupied' && b.tenant?.profileStatus === 'incomplete').length
+  const incompleteCount   = beds.filter(b => {
+    if (b.status !== 'occupied') return false
+    const c = b.tenant?.profileCompletion
+    return c ? c.missing.length > 0 : b.tenant?.profileStatus !== 'complete'
+  }).length
   const overCapacity      = !loading && normalTotal > room.capacity
   const overBy            = overCapacity ? normalTotal - room.capacity : 0
   const vacantNormalCount = normalBeds.filter(b => b.status === 'vacant').length
@@ -514,19 +512,27 @@ const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDe
 
   const isInactive = room.isActive === false || room.status === 'maintenance' || room.status === 'blocked'
 
-  const extraActive = extraBeds.filter(b => b.status === 'occupied' || b.status === 'reserved').length
+  const extraActive   = extraBeds.filter(b => b.status === 'occupied' || b.status === 'reserved').length
+  const extraTotal    = extraBeds.length
+  const extraVacant   = extraBeds.filter(b => b.status === 'vacant').length
+  const extraReserved = extraBeds.filter(b => b.status === 'reserved').length
+  const blocked       = beds.filter(b => b.status === 'blocked').length
 
   useEffect(() => {
     if (!loading && data) {
-      onStatsReady?.(room._id, { occupied, vacant, reserved, total, extraActive })
+      onStatsReady?.(room._id, { occupied, vacant, reserved, total, extraActive, extraTotal, extraVacant, extraReserved, blocked })
     }
-  }, [loading, data, occupied, vacant, reserved, total, extraActive, room._id])
+  }, [loading, data, occupied, vacant, reserved, total, extraActive, extraTotal, extraVacant, extraReserved, blocked, room._id])
 
   const menuItems = isInactive ? [] : [
+    { label: 'View Room',       icon: Eye,    onClick: () => onRoomClick?.(room) },
     { label: 'Edit Room',       icon: Pencil, onClick: () => onEditRoom?.(room) },
-    ...(occupied > 0
+    ...((occupied > 0 || reserved > 0 || blocked > 0 || extraBeds.length > 0)
       ? [{ label: 'Deactivate Room', icon: Power, disabled: true,
-           tooltip: `${occupied} tenant${occupied > 1 ? 's' : ''} assigned` }]
+           tooltip: occupied > 0        ? `${occupied} bed${occupied > 1 ? 's' : ''} occupied`
+                  : reserved > 0        ? `${reserved} bed${reserved > 1 ? 's' : ''} reserved`
+                  : blocked > 0         ? `${blocked} bed${blocked > 1 ? 's' : ''} blocked`
+                  : `${extraBeds.length} extra bed${extraBeds.length > 1 ? 's' : ''} exist` }]
       : [{ label: 'Deactivate Room', icon: Power, onClick: () => onToggleActive?.(room) }]),
   ]
 
@@ -537,15 +543,21 @@ const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDe
     room.type  ? (room.type.charAt(0).toUpperCase() + room.type.slice(1)) : null,
   ].filter(Boolean).join(' · ')
 
+  const hasBedFilterActive = bedFilter !== null
+  const dimmedRoom = hasBedFilterActive && !roomMatches
+
   return (
-    <div className={`
-      bg-white rounded-2xl border flex flex-col overflow-visible
-      transition-all duration-300 ease-out group/card
-      ${isInactive
-        ? 'border-slate-200 opacity-55 grayscale-[20%]'
-        : 'border-slate-200 shadow-sm hover:shadow-[0_8px_32px_rgba(0,0,0,.10)] hover:-translate-y-1'
-      }
-    `}>
+    <div
+      data-testid={`room-card-${room._id}`}
+      className={[
+        'bg-white rounded-2xl border flex flex-col overflow-visible',
+        'transition-all duration-300 ease-out group/card',
+        isInactive
+          ? 'border-slate-200 opacity-55 grayscale-[20%]'
+          : dimmedRoom
+            ? 'border-slate-100 shadow-none opacity-50'
+            : 'border-slate-200 shadow-sm hover:shadow-[0_8px_32px_rgba(0,0,0,.10)] hover:-translate-y-1',
+      ].join(' ')}>
 
       {/* ── Header ── */}
       <div className="px-4 pt-4 pb-3 border-b border-slate-100">
@@ -593,7 +605,7 @@ const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDe
               <BedDouble size={11} className={overCapacity && !isInactive ? 'text-red-400' : 'text-slate-400'} />
               {normalTotal} Bed{normalTotal !== 1 ? 's' : ''}
             </span>
-            {!isInactive && <DropdownMenu items={menuItems} />}
+            {!isInactive && <DropdownMenu items={menuItems} testid={`room-menu-${room._id}`} />}
             {isInactive && (
               <button onClick={() => onReactivate?.(room)} title="Reactivate"
                 className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
@@ -657,6 +669,7 @@ const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDe
           compact
           onBedClick={(bed, action) => onBedClick(bed, room, refetch, action)}
           loadingBedId={loadingBedId}
+          bedFilter={!isInactive ? bedFilter : null}
         />
 
         {/* Add Extra Bed CTA */}
@@ -737,7 +750,7 @@ const ACTIVITY_META = {
   refund:               { icon: ArrowRightLeft, bg: 'bg-red-100',   text: 'text-red-500',     label: 'Refund'     },
 }
 
-const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, onAddExtraBed, loadingBedId = null }) => {
+const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, onAddExtraBed, onViewTenant, loadingBedId = null }) => {
   const { data, loading, refetch } = useApi(
     () => getBeds(propertyId, room._id),
     [propertyId, room._id]
@@ -752,19 +765,24 @@ const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, o
   const beds          = [...(data?.data ?? [])].sort(sortBeds)
   const normalBeds    = beds.filter(b => !b.isExtra)
   const extraBeds     = beds.filter(b => b.isExtra)
-  const occupied      = beds.filter(b => b.status === 'occupied').length
-  const vacant        = beds.filter(b => b.status === 'vacant').length
-  const reserved      = beds.filter(b => b.status === 'reserved').length
-  const activeTenants = beds.filter(b => b.status === 'occupied' && b.tenant)
-  const totalRent     = activeTenants.reduce((sum, b) => sum + (b.tenant?.rentAmount ?? 0), 0)
-  const firstVacant   = normalBeds.find(b => b.status === 'vacant')
+  // KPI counts use normal beds only — consistent with RoomCard header ("0 of 1")
+  // Extra beds are shown separately in the Bed Layout section
+  const occupied      = normalBeds.filter(b => b.status === 'occupied').length
+  const vacant        = normalBeds.filter(b => b.status === 'vacant').length
+  const reserved      = normalBeds.filter(b => b.status === 'reserved').length
+  // activeTenants includes all beds (extra beds can also have tenants)
+  const activeTenants   = beds.filter(b => b.status === 'occupied' && b.tenant)
+  const totalRent       = activeTenants.reduce((sum, b) => sum + (b.tenant?.rentAmount ?? 0), 0)
+  const firstVacant     = normalBeds.find(b => b.status === 'vacant')
+  // Extra bed stats — shown as a separate row below the main KPIs
+  const extraOccupied   = extraBeds.filter(b => b.status === 'occupied').length
+  const extraRent       = extraBeds.filter(b => b.status === 'occupied')
+                            .reduce((sum, b) => sum + (b.tenant?.rentAmount ?? 0), 0)
 
   const roomTypeLabel = room.type
     ? room.type.charAt(0).toUpperCase() + room.type.slice(1)
     : '—'
-  const rentTypeLabel =
-    room.rentType === 'per_bed'  ? 'Fixed per bed' :
-    room.rentType === 'per_room' ? 'Split by occupancy' : '—'
+  const rentTypeLabel = 'Fixed per bed'
 
   const subtitle = [
     room.floor != null ? `Floor ${room.floor}` : null,
@@ -772,8 +790,8 @@ const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, o
   ].filter(Boolean).join(' · ')
 
   // ── Status badge logic ────────────────────────────────────────────────────
-  const statusBadge = !loading && beds.length > 0
-    ? occupied === beds.length
+  const statusBadge = !loading && normalBeds.length > 0
+    ? occupied === normalBeds.length
       ? { label: 'Full',    cls: 'bg-red-100 text-red-600 border-red-200',         dot: 'bg-red-500'     }
       : occupied === 0 && reserved === 0
         ? { label: 'Vacant',  cls: 'bg-emerald-100 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' }
@@ -788,7 +806,6 @@ const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, o
     { label: 'Type',          value: roomTypeLabel },
     { label: 'Category',      value: categoryLabel },
     { label: 'Capacity',      value: `${room.capacity} bed${room.capacity !== 1 ? 's' : ''}` },
-    { label: 'Rent Type',     value: rentTypeLabel },
     { label: 'Base Rent',     value: room.baseRent ? `₹${room.baseRent.toLocaleString('en-IN')}` : '—' },
     { label: 'Floor',         value: room.floor != null ? `Floor ${room.floor}` : '—' },
     { label: 'Gender',        value: room.gender ? (room.gender.charAt(0).toUpperCase() + room.gender.slice(1)) : '—' },
@@ -846,6 +863,26 @@ const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, o
           ))}
         </div>
 
+        {/* ── Extra beds summary row ── */}
+        {!loading && extraBeds.length > 0 && (
+          <div className="flex items-center justify-between rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-violet-600 tracking-wide uppercase">✦ Extra</span>
+              <span className="text-[11px] text-violet-500 font-medium">
+                {extraOccupied} of {extraBeds.length} occupied
+              </span>
+              {extraBeds.length - extraOccupied > 0 && (
+                <span className="text-[10px] font-semibold text-violet-400 bg-violet-100 border border-violet-200 rounded-full px-2 py-0.5">
+                  {extraBeds.length - extraOccupied} vacant
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] font-bold text-violet-600 tabular-nums">
+              {extraRent > 0 ? `₹${extraRent.toLocaleString('en-IN')}/mo` : '₹0/mo'}
+            </span>
+          </div>
+        )}
+
         {/* ── Bed Layout ── */}
         <div>
           <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">Bed Layout</h3>
@@ -854,7 +891,11 @@ const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, o
             extraBeds={extraBeds}
             room={room}
             loading={loading}
-            onBedClick={(bed, action) => onBedClick(bed, room, refetch, action)}
+            onBedClick={(bed, action) => {
+              if (bed.status === 'occupied' && !action) return
+              onBedClick(bed, room, refetch, action)
+            }}
+            noClickStatuses={['occupied']}
             loadingBedId={loadingBedId}
           />
         </div>
@@ -885,15 +926,11 @@ const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, o
                   </div>
                 )}
               </div>
-              <div className="flex items-center justify-between border-t border-primary-100/60 pt-2.5">
-                <span className="text-[11px] text-primary-400 font-medium">Rent Type</span>
-                <span className="text-[11px] text-primary-600 font-semibold">{rentTypeLabel}</span>
-              </div>
               {room.baseRent > 0 && (
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-primary-400 font-medium">Base Rent</span>
+                <div className="flex items-center justify-between border-t border-primary-100/60 pt-2.5">
+                  <span className="text-[11px] text-primary-400 font-medium">Rent per bed</span>
                   <span className="text-[11px] text-primary-600 font-semibold">
-                    ₹{room.baseRent.toLocaleString('en-IN')} / bed
+                    ₹{room.baseRent.toLocaleString('en-IN')} / mo
                   </span>
                 </div>
               )}
@@ -916,8 +953,8 @@ const RoomDetailDrawer = ({ room, propertyId, onClose, onBedClick, onEditRoom, o
                   <button
                     key={bed._id}
                     type="button"
-                    onClick={() => onBedClick(bed, room, refetch, null)}
-                    className="w-full flex items-center justify-between gap-3 rounded-xl bg-white border border-slate-200 px-3.5 py-3 hover:border-primary-200 hover:shadow-sm transition-all text-left group"
+                    onClick={() => bed.tenant?._id && onViewTenant?.(bed.tenant._id)}
+                    className="w-full flex items-center justify-between gap-3 rounded-xl bg-white border border-slate-200 px-3.5 py-3 text-left hover:border-primary-200 hover:bg-primary-50/30 transition-colors"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className={`h-8 w-8 shrink-0 rounded-full flex items-center justify-center ${hasDues ? 'bg-red-100' : 'bg-primary-100'}`}>
@@ -1111,7 +1148,7 @@ const StatusBadge = ({ status }) => {
 // ══════════════════════════════════════════════════════════════════════════════
 //  ActionButton — stylized action button with icon + micro-interactions
 // ══════════════════════════════════════════════════════════════════════════════
-const ActionButton = ({ icon: Icon, label, onClick, disabled, variant = 'secondary', loading }) => {
+const ActionButton = ({ icon: Icon, label, onClick, disabled, variant = 'secondary', loading, testid }) => {
   const variants = {
     primary:      'bg-primary-600 text-white hover:bg-primary-700 hover:shadow-md hover:shadow-primary-200/50 border-primary-600',
     secondary:    'bg-white text-slate-700 hover:bg-slate-50 hover:shadow-sm border-slate-200 hover:border-slate-300',
@@ -1125,6 +1162,7 @@ const ActionButton = ({ icon: Icon, label, onClick, disabled, variant = 'seconda
       type="button"
       onClick={onClick}
       disabled={disabled || loading}
+      data-testid={testid}
       className={`flex items-center justify-center gap-2.5 w-full rounded-xl border px-4 py-2.5 text-sm font-semibold
         transition-all duration-150 ease-out
         hover:shadow-md
@@ -1406,7 +1444,7 @@ const TenantSearch = ({
 // ══════════════════════════════════════════════════════════════════════════════
 //  BedActionModal — Smart Bed Control Panel
 // ══════════════════════════════════════════════════════════════════════════════
-const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, onViewTenant, allRooms = [], initialView = 'actions' }) => {
+export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, onViewTenant, allRooms = [], initialView = 'actions', zIndex }) => {
   const toast = useToast()
   const [view, setView]               = useState(initialView)
   const [submitting, setSubmitting]   = useState(false)
@@ -1417,6 +1455,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
   const [rentOverride, setRentOverride]           = useState('')
   const [depositInput, setDepositInput]           = useState('')
   const [depositEnabled, setDepositEnabled]       = useState(false)
+  const [depositCollected, setDepositCollected]   = useState(false)  // false = pending (safer default — must explicitly confirm collected)
   const [moveInDate, setMoveInDate]               = useState(() => new Date().toISOString().split('T')[0])
 
   // Block state
@@ -1462,10 +1501,9 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
   const [resExistingReservation, setResExistingReservation] = useState(null)
   const [resAutoVacateConflict, setResAutoVacateConflict]   = useState(null) // { bedNumber, roomNumber }
 
-  const [dueDay, setDueDay] = useState(5)  // grace days after cycle start before rent is due (0–28)
-
   // New tenant inline form
-  const [assignMode, setAssignMode]       = useState('list')  // 'list' | 'create'
+  const [assignMode, setAssignMode]       = useState('list')  // 'list' | 'create' | 'edit'
+  const [searchResetKey, setSearchResetKey] = useState(0)     // bump to reset TenantSearch query
   const [newName, setNewName]             = useState('')
   const [newPhone, setNewPhone]           = useState('')
   const [creatingTenant, setCreatingTenant] = useState(false)
@@ -1478,6 +1516,10 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
   // Without this guard, any view change (e.g. a parent re-render) would wipe
   // mid-flow state (selected tenant, current step, etc.).
   const resInitialized    = useRef(false)
+
+  // Edit extra bed settings state
+  const [editIsChargeable, setEditIsChargeable] = useState(bed.isChargeable ?? true)
+  const [editExtraCharge, setEditExtraCharge]   = useState(String(bed.extraCharge ?? ''))
 
   // Change room state
   const [targetRoomId, setTargetRoomId]     = useState('')
@@ -1543,7 +1585,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
       clearTimeout(phoneDebounceRef.current)
       setDepositInput('')
       setDepositEnabled(false)
-      setDueDay(1)
+      setDepositCollected(false)
     } else if (bed.status === 'reserved' && bed.tenant?._id) {
       // Reserved bed: auto-select the linked reserved tenant so the user doesn't need
       // to search for them manually (they are filtered out of TenantSearch by
@@ -1644,10 +1686,11 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
     cancelReservation:   `Cancel Reservation — Bed ${bed.bedNumber}`,
     useDeposit:          `Use Deposit — ${bed.tenant?.name ?? 'Tenant'}`,
     confirmDeleteExtra:  `Remove Extra Bed ${bed.bedNumber}`,
+    editExtra:           `Edit Extra Bed ${bed.bedNumber}`,
   }
 
   return (
-    <Modal title={TITLES[view]} onClose={onClose} size={view === 'changeRoom' || view === 'moveReservation' ? 'md' : 'sm'}>
+    <Modal title={TITLES[view]} onClose={onClose} size={view === 'changeRoom' || view === 'moveReservation' ? 'md' : 'sm'} zIndex={zIndex}>
 
       {/* ── MAIN ACTIONS VIEW ── */}
       {view === 'actions' && (() => {
@@ -1681,7 +1724,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                   )}
                 </div>
                 <p className="text-[11px] text-white/70 mt-2 capitalize flex items-center gap-2 flex-wrap">
-                  {room.type} · {room.capacity} beds · {room.rentType === 'per_room' ? 'Per Room pricing' : 'Per Bed pricing'}
+                  {room.type} · {room.capacity} beds · Per Bed pricing
                   {bed.isExtra && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-white/25 border border-white/40 px-2 py-0.5 text-[9px] font-bold text-white normal-case tracking-wider">
                       ✦ Extra Bed
@@ -1884,13 +1927,6 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                     </p>
                   )
                 }
-                if (snap.rentType === 'per_room') {
-                  return (
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      Equal Split · ₹{snap.baseRent?.toLocaleString('en-IN')} ÷ {snap.divisorUsed}
-                    </p>
-                  )
-                }
                 return (
                   <p className="text-[10px] text-slate-400 mt-0.5">
                     Per Bed · Fixed
@@ -1907,23 +1943,6 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                 if (hasCustomRent) {
                   return <p className="text-[10px] text-slate-400 mt-0.5">Custom override · Locked at assignment</p>
                 }
-                if (room.rentType === 'per_room') {
-                  const currentOcc   = occupancy?.occupied ?? 0
-                  // Route through the shared engine so MIN_RENT floor is applied
-                  const estPerPerson = calculateRent({
-                    room: { baseRent, rentType: room.rentType },
-                    bed:  { isExtra: false, rentOverride: null, isChargeable: true, extraCharge: 0 },
-                    normalOccupied: currentOcc + 1,
-                  }).finalRent
-                  return (
-                    <div className="mt-1 space-y-0.5">
-                      <p className="text-[10px] text-slate-400">Split equally at assignment</p>
-                      <p className="text-[10px] font-semibold text-primary-500">
-                        Est. ₹{estPerPerson.toLocaleString('en-IN')}/person after assign
-                      </p>
-                    </div>
-                  )
-                }
                 return <p className="text-[10px] text-slate-400 mt-0.5">Per Bed · Locked at assignment</p>
               })() : (
                 <p className="text-[10px] text-slate-400 mt-0.5">
@@ -1935,9 +1954,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                           : 'Extra Bed · Uses room base rent')
                     : hasCustomRent
                       ? 'Custom override'
-                      : room.rentType === 'per_room'
-                        ? 'Per Room · final at assign'
-                        : 'Per Bed · Fixed'}
+                      : 'Per Bed · Fixed'}
                 </p>
               )}
             </div>
@@ -2000,16 +2017,26 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                   </button>
                 </div>
 
-                {/* Remove extra bed — danger, below the grid */}
+                {/* Edit / Remove extra bed */}
                 {bed.isExtra && (
-                  <button
-                    type="button"
-                    onClick={() => setView('confirmDeleteExtra')}
-                    className="group w-full flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 px-4 py-2 text-xs font-semibold text-red-600 transition-all duration-150 active:scale-[0.98]"
-                  >
-                    <Trash2 size={13} />
-                    Remove Extra Bed
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setView('editExtra')}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 hover:bg-violet-100 px-4 py-2 text-xs font-semibold text-violet-700 transition-all duration-150 active:scale-[0.98]"
+                    >
+                      <Pencil size={13} />
+                      Edit Charge
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setView('confirmDeleteExtra')}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 px-4 py-2 text-xs font-semibold text-red-600 transition-all duration-150 active:scale-[0.98]"
+                    >
+                      <Trash2 size={13} />
+                      Remove
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -2017,16 +2044,6 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
             {/* RESERVED */}
             {bed.status === 'reserved' && (
               <>
-                {bed.isExtra && (
-                  <div className="space-y-1.5">
-                    <ActionButton icon={Trash2} label="Remove Extra Bed" variant="danger-light"
-                      disabled />
-                    <p className="flex items-center gap-1.5 text-[10px] text-amber-700 font-medium px-0.5">
-                      <AlertTriangle size={10} className="shrink-0" />
-                      Cancel the reservation first to remove this bed
-                    </p>
-                  </div>
-                )}
                 <ActionButton icon={UserPlus} label="Convert to Tenant" variant="primary"
                   onClick={() => {
                     if (bed.reservation?.name)     setNewName(bed.reservation.name)
@@ -2055,8 +2072,11 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
 
             {/* OCCUPIED */}
             {bed.status === 'occupied' && (() => {
-              const isIncomplete = bed.tenant?.profileStatus !== 'complete'
               const completion   = bed.tenant?.profileCompletion
+              // Prefer the real-time virtual (avoids stale stored profileStatus); fall back to stored field.
+              const isIncomplete = completion
+                ? completion.missing.length > 0
+                : bed.tenant?.profileStatus !== 'complete'
               return (
                 <>
                   {/* Profile incomplete banner */}
@@ -2099,13 +2119,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                   )}
                   <ActionButton icon={LogOut} label="Vacate Bed" variant="danger" onClick={() => setView('vacate')} />
                   {bed.isExtra && (
-                    <div className="space-y-1.5">
-                      <ActionButton icon={Trash2} label="Remove Extra Bed" variant="danger-light" disabled />
-                      <p className="flex items-center gap-1.5 text-[10px] text-amber-700 font-medium px-0.5">
-                        <AlertTriangle size={10} className="shrink-0" />
-                        Cannot remove — bed is occupied
-                      </p>
-                    </div>
+                    <ActionButton icon={Pencil} label="Edit Extra Bed Charge" variant="secondary" onClick={() => setView('editExtra')} />
                   )}
                 </>
               )
@@ -2363,6 +2377,21 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Pending deposit notice ── */}
+          {!vacateCheckLoading && depositAmt > 0 && !depositPaid && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-2.5">
+              <Shield size={14} className="text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-bold text-amber-800">
+                  Deposit ₹{depositAmt.toLocaleString('en-IN')} not collected
+                </p>
+                <p className="text-[11px] text-amber-600 mt-0.5">
+                  The security deposit was recorded as pending. Vacating without collecting it means it will not be recoverable.
+                </p>
               </div>
             </div>
           )}
@@ -2811,14 +2840,11 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
           { label: '+7 Days',  val: addDaysLocal(7) },
         ]
         const selectedTenant   = selectedTenantObj
-        const hasSelection     = !!selectedTenantId || (assignMode === 'create' && !!newName.trim() && !!newPhone)
+        const hasSelection     = !!selectedTenantId || (!!selectedTenantObj && !selectedTenantObj._id)
         const canAssign        = hasSelection && !(!!phoneConflict && !phoneConflict.bed) && !phoneChecking && !submitting && !creatingTenant
         // Estimated rent — use backend preview; fall back to baseRent while loading
         const previewRent    = rentPreview?.finalRent ?? baseRent
         const estRent        = rentOverride ? Number(rentOverride) : previewRent
-        // Per-room split display values (from API when available)
-        const divisor        = rentPreview?.futureOccupied ?? ((occupancy?.occupied ?? 0) + 1)
-        const splitPerPerson = rentOverride ? Number(rentOverride) : previewRent
 
         return (
         <div className="space-y-5">
@@ -2839,16 +2865,17 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
 
             {/* Relative wrapper — list fades out while form slides in */}
             <div className="relative">
-              {/* STATE 1 — LIST MODE: kept in DOM so it fades out on exit */}
+              {/* STATE 1 — LIST MODE: hidden once a tenant is selected/pending */}
               <div
-                aria-hidden={assignMode === 'create'}
+                aria-hidden={assignMode !== 'list' || !!selectedTenantObj}
                 className={`transition-opacity duration-150 ${
-                  assignMode === 'create'
+                  assignMode !== 'list' || !!selectedTenantObj
                     ? 'opacity-0 pointer-events-none absolute inset-x-0 top-0'
                     : 'opacity-100'
                 }`}
               >
                 <TenantSearch
+                  key={searchResetKey}
                   propertyId={propertyId}
                   assignable
                   reservedBedId={bed.status === 'reserved' ? bed._id : null}
@@ -2869,7 +2896,118 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                 />
               </div>
 
-              {/* STATE 2 — CREATE MODE */}
+              {/* STATE 2 — EDIT MODE */}
+              {assignMode === 'edit' && (
+                <div className="animate-modeIn rounded-xl border border-primary-200 bg-white overflow-hidden">
+                  <div className="flex items-center justify-between px-3.5 py-2.5 bg-primary-50/60 border-b border-primary-100">
+                    <p className="text-xs font-bold text-primary-700">Edit Tenant</p>
+                    <button type="button" onClick={() => {
+                      setAssignMode('list'); setNewName(''); setNewPhone(''); setPhoneConflict(null)
+                      setSelectedTenantId(''); setSelectedTenantObj(null)
+                      setSearchResetKey(k => k + 1)
+                    }} className="text-[11px] font-semibold text-slate-400 hover:text-slate-600 transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                  <div className="p-3.5 space-y-2.5">
+                    <div>
+                      <label className="label text-xs">Full Name *</label>
+                      <input className="input text-sm" placeholder="e.g. Rahul Sharma"
+                        data-testid="edit-tenant-name-input"
+                        value={newName} onChange={e => setNewName(e.target.value)} autoFocus />
+                    </div>
+                    <div>
+                      <label className="label text-xs">Phone Number *</label>
+                      <div className="relative">
+                        <PhoneInput
+                          value={newPhone}
+                          testid="edit-tenant-phone-input"
+                          onChange={val => {
+                            setNewPhone(val)
+                            setPhoneConflict(null)
+                            clearTimeout(phoneDebounceRef.current)
+                            const digits = val.replace(/\D/g, '')
+                            if (digits.length < 6) return
+                            setPhoneChecking(true)
+                            phoneDebounceRef.current = setTimeout(() => {
+                              searchTenantsApi(propertyId, { phone: val.trim() })
+                                .then(r => {
+                                  const conflict = (r.data?.data ?? []).find(
+                                    t => t._id !== selectedTenantId &&
+                                        (t.status === 'active' || t.status === 'notice' || t.status === 'reserved')
+                                  )
+                                  setPhoneConflict(conflict ?? null)
+                                })
+                                .catch(() => {})
+                                .finally(() => setPhoneChecking(false))
+                            }, 500)
+                          }}
+                          placeholder="Mobile number"
+                        />
+                        {phoneChecking && (
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 animate-pulse">
+                            checking…
+                          </span>
+                        )}
+                      </div>
+                      {phoneConflict && (
+                        <p className="text-[11px] text-red-500 mt-1 flex items-center gap-1">
+                          <AlertTriangle size={11} /> Phone already used by {phoneConflict.name}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex gap-2 pt-0.5">
+                      <button type="button"
+                        onClick={() => {
+                          setAssignMode('list'); setNewName(''); setNewPhone(''); setPhoneConflict(null)
+                          setSelectedTenantId(''); setSelectedTenantObj(null)
+                          setSearchResetKey(k => k + 1)
+                        }}
+                        className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                        Cancel
+                      </button>
+                      <button type="button"
+                        data-testid="edit-tenant-save-btn"
+                        disabled={!newName.trim() || !newPhone || !!phoneConflict || phoneChecking || creatingTenant}
+                        className="flex-1 rounded-xl bg-primary-600 hover:bg-primary-700 py-2 text-xs font-bold text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        onClick={async () => {
+                          const tenantIdToEdit = selectedTenantId || selectedTenantObj?._id
+                          if (!tenantIdToEdit) {
+                            toast('Cannot edit — tenant has not been saved yet', 'error')
+                            return
+                          }
+                          setCreatingTenant(true)
+                          try {
+                            const res = await updateTenantApi(propertyId, tenantIdToEdit, {
+                              name:  newName.trim(),
+                              phone: newPhone.trim(),
+                            })
+                            const updated = res.data?.data ?? res.data
+                            setSelectedTenantObj(updated)
+                            setSelectedTenantId(updated._id)
+                            setAssignMode('list')
+                            setNewName(''); setNewPhone(''); setPhoneConflict(null)
+                            toast('Tenant updated', 'success')
+                          } catch (err) {
+                            toast(err.response?.data?.message || 'Failed to update tenant', 'error')
+                          } finally {
+                            setCreatingTenant(false)
+                          }
+                        }}>
+                        {creatingTenant && (
+                          <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                          </svg>
+                        )}
+                        {creatingTenant ? 'Saving…' : 'Save Changes'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STATE 3 — CREATE MODE */}
               {assignMode === 'create' && (
                 <div className="animate-modeIn rounded-xl border border-primary-200 bg-white overflow-hidden">
 
@@ -2894,6 +3032,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                       <div>
                         <label className="label text-xs">Full Name *</label>
                         <input className="input text-sm" placeholder="e.g. Rahul Sharma"
+                          data-testid="new-tenant-name-input"
                           value={newName} onChange={e => setNewName(e.target.value)} autoFocus />
                       </div>
                       <div>
@@ -2901,6 +3040,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                         <div className="relative">
                           <PhoneInput
                             value={newPhone}
+                            testid="new-tenant-phone-input"
                             onChange={val => {
                               setNewPhone(val)
                               setPhoneConflict(null)
@@ -2938,34 +3078,17 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                           Cancel
                         </button>
                         <button type="button"
-                          disabled={!newName.trim() || !newPhone || phoneChecking || creatingTenant}
-                          className="flex-1 rounded-xl bg-primary-600 hover:bg-primary-700 py-2 text-xs font-bold text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                          onClick={async () => {
-                            setCreatingTenant(true)
-                            try {
-                              const res = await createTenantApi(propertyId, {
-                                name:   newName.trim(),
-                                phone:  newPhone.trim(),
-                                status: 'reserved',
-                              })
-                              const newTenant = res.data?.data ?? res.data
-                              setSelectedTenantId(newTenant._id)
-                              setSelectedTenantObj(newTenant)
-                              setAssignMode('list')
-                              setNewName(''); setNewPhone(''); setPhoneConflict(null)
-                            } catch (err) {
-                              toast(err.response?.data?.message || 'Failed to create tenant', 'error')
-                            } finally {
-                              setCreatingTenant(false)
-                            }
+                          data-testid="new-tenant-continue-btn"
+                          disabled={!newName.trim() || !newPhone || !!phoneConflict || phoneChecking}
+                          className="flex-1 rounded-xl bg-primary-600 hover:bg-primary-700 py-2 text-xs font-bold text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          onClick={() => {
+                            // Store as pending — actual API call happens on Assign Tenant
+                            setSelectedTenantObj({ name: newName.trim(), phone: newPhone.trim() })
+                            setSelectedTenantId('')
+                            setAssignMode('list')
+                            setNewName(''); setNewPhone(''); setPhoneConflict(null)
                           }}>
-                          {creatingTenant && (
-                            <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                            </svg>
-                          )}
-                          {creatingTenant ? 'Creating…' : 'Create & Continue'}
+                          Continue
                         </button>
                       </div>
                     </div>
@@ -3030,8 +3153,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
 
           {/* ── Assignment Preview Card — shown once tenant is selected ── */}
           {selectedTenant && assignMode === 'list' && (
-            <div className="rounded-2xl border border-primary-200 bg-gradient-to-br from-primary-50 to-white p-4 space-y-3">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-primary-500">Assignment Preview</p>
+            <div data-testid="assignment-preview-card" className="rounded-2xl border border-primary-200 bg-gradient-to-br from-primary-50 to-white p-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-full bg-primary-600 flex items-center justify-center shrink-0">
                   <span className="text-sm font-bold text-white">{selectedTenant.name?.slice(0, 2).toUpperCase()}</span>
@@ -3040,31 +3162,23 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                   <p className="text-sm font-bold text-slate-800 truncate">{selectedTenant.name}</p>
                   <p className="text-[11px] text-slate-400">{selectedTenant.phone}</p>
                 </div>
-                <button type="button" onClick={() => setSelectedTenantId('')}
-                  className="text-[10px] font-semibold text-primary-600 hover:text-primary-700 transition-colors shrink-0">
-                  Change
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-xl bg-white border border-primary-100 px-3 py-2.5">
-                  <p className="text-[10px] text-slate-400 mb-0.5">Monthly Rent</p>
-                  <p className="text-sm font-bold text-slate-800 tabular-nums">₹{estRent.toLocaleString('en-IN')}</p>
-                  {room.rentType === 'per_room' && !rentOverride && (
-                    <p className="text-[9px] text-slate-400 mt-0.5">Est. · locked at assign</p>
-                  )}
-                </div>
-                <div className="rounded-xl bg-white border border-primary-100 px-3 py-2.5">
-                  <p className="text-[10px] text-slate-400 mb-0.5">Move-in</p>
-                  <p className="text-sm font-bold text-slate-800">
-                    {moveInDate
-                      ? new Date(moveInDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' })
-                      : 'Today'}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-white border border-primary-100 px-3 py-2.5">
-                  <p className="text-[10px] text-slate-400 mb-0.5">Grace Days</p>
-                  <p className="text-sm font-bold text-slate-800">{dueDay}<span className="text-xs font-normal text-slate-400"> day{dueDay !== 1 ? 's' : ''} after start</span></p>
-                </div>
+                {(selectedTenantId || selectedTenant?._id) ? (
+                  <button type="button" onClick={() => {
+                    setNewName(selectedTenant.name ?? '')
+                    setNewPhone(selectedTenant.phone ?? '')
+                    setPhoneConflict(null)
+                    setAssignMode('edit')
+                  }} className="text-[10px] font-semibold text-primary-600 hover:text-primary-700 transition-colors shrink-0">
+                    Edit
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => {
+                    setSelectedTenantObj(null)
+                    setSearchResetKey(k => k + 1)
+                  }} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600 transition-colors shrink-0">
+                    Change
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -3077,7 +3191,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
 
             {bed.isExtra ? (() => {
               const effectiveRent = calculateRent({
-                room: { baseRent, rentType: room.rentType },
+                room: { baseRent },
                 bed,
                 normalOccupied: 0,
               }).finalRent
@@ -3115,40 +3229,14 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
               )
             })() : (
               <>
-                {room.rentType === 'per_room' ? (
-                  /* Per-room: show split math */
-                  <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3.5 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-blue-500">Per Room · Split Equally</span>
-                      <span className="text-[10px] bg-blue-100 text-blue-600 font-semibold px-2 py-0.5 rounded-full border border-blue-200">
-                        ÷ {rentPreview?.futureOccupied ?? divisor} occupant{(rentPreview?.futureOccupied ?? divisor) !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 items-center">
-                      <div className="rounded-lg bg-white border border-blue-100 px-2.5 py-2 text-center">
-                        <p className="text-[9px] text-slate-400 mb-0.5">Room Rent</p>
-                        <p className="text-sm font-bold text-slate-700 tabular-nums">₹{baseRent.toLocaleString('en-IN')}</p>
-                      </div>
-                      <div className="text-center text-slate-400 text-sm font-bold">÷ {divisor}</div>
-                      <div className="rounded-lg bg-primary-600 px-2.5 py-2 text-center">
-                        <p className="text-[9px] text-primary-200 mb-0.5">Your Share</p>
-                        <p className="text-sm font-bold text-white tabular-nums">₹{splitPerPerson.toLocaleString('en-IN')}</p>
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-blue-600/80 leading-relaxed">
-                      Final amount is calculated at assignment and <span className="font-semibold">locked permanently</span>.
-                    </p>
+                {/* Per-bed: fixed */}
+                <div className="rounded-xl border border-slate-100 bg-slate-50/60 px-3.5 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Per Bed · Fixed</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Locked at assignment, does not change</p>
                   </div>
-                ) : (
-                  /* Per-bed: fixed */
-                  <div className="rounded-xl border border-slate-100 bg-slate-50/60 px-3.5 py-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Per Bed · Fixed</p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">Locked at assignment, does not change</p>
-                    </div>
-                    <span className="text-base font-bold text-slate-800 tabular-nums">₹{(rentOverride ? Number(rentOverride) : baseRent).toLocaleString('en-IN')}<span className="text-xs font-normal text-slate-400">/mo</span></span>
-                  </div>
-                )}
+                  <span className="text-base font-bold text-slate-800 tabular-nums">₹{(rentOverride ? Number(rentOverride) : baseRent).toLocaleString('en-IN')}<span className="text-xs font-normal text-slate-400">/mo</span></span>
+                </div>
 
                 {/* Advanced: override */}
                 <details className="group">
@@ -3192,42 +3280,8 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
               ))}
             </div>
             <input type="date" className="input text-sm py-1.5"
+              data-testid="move-in-date-input"
               value={moveInDate} onChange={e => setMoveInDate(e.target.value)} />
-          </div>
-
-          <div className="border-t border-slate-100" />
-
-          {/* ── Section: Grace Days ── */}
-          <div className="space-y-2.5">
-            <SectionHeader icon={Calendar} title="Grace Days" subtitle="Days after cycle start before rent is due" />
-            <div className="grid grid-cols-6 gap-1.5">
-              {[0, 3, 5, 7, 10, 15].map(d => (
-                <button key={d} type="button"
-                  onClick={() => setDueDay(d)}
-                  className={`rounded-xl py-2 text-[11px] font-semibold transition-all duration-150 ${
-                    dueDay === d
-                      ? 'bg-primary-600 text-white shadow-sm shadow-primary-200/60'
-                      : 'bg-slate-50 border border-slate-200 text-slate-500 hover:border-primary-300 hover:text-primary-600 hover:bg-primary-50/50'
-                  }`}>
-                  {d}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="number" min="0" max="28"
-                className="input text-sm py-1.5 w-24 tabular-nums"
-                value={dueDay}
-                onChange={e => {
-                  const v = Math.min(28, Math.max(0, Number(e.target.value) || 0))
-                  setDueDay(v)
-                }}
-              />
-              <p className="text-[11px] text-slate-400">days after cycle start <span className="text-slate-500 font-medium">(0–28)</span></p>
-            </div>
-            <p className="text-[10px] text-slate-400 bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-2 leading-relaxed">
-              Billing cycle starts from the move-in date and repeats monthly on the same day.
-            </p>
           </div>
 
           <div className="border-t border-slate-100" />
@@ -3316,10 +3370,11 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
             )
           })()}
 
-          {/* ── Section: Security Deposit (toggle) ── */}
+          {/* ── Section: Security Deposit ── */}
           <div className="rounded-xl border border-slate-200 overflow-hidden">
             {/* Toggle header */}
             <button type="button"
+              data-testid="deposit-toggle-btn"
               onClick={() => { setDepositEnabled(v => !v); if (depositEnabled) setDepositInput('') }}
               className="w-full flex items-center justify-between px-3.5 py-3 hover:bg-slate-50 transition-colors">
               <div className="flex items-center gap-2.5">
@@ -3330,26 +3385,64 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                     depositEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
                   }`} />
                 </div>
-                <span className="text-sm font-semibold text-slate-700">Collect Security Deposit</span>
+                <span className="text-sm font-semibold text-slate-700">Security Deposit</span>
                 {depositEnabled && depositInput && (
-                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
-                    ₹{Number(depositInput).toLocaleString('en-IN')}
+                  <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 border ${
+                    depositCollected
+                      ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                      : 'text-amber-700 bg-amber-50 border-amber-200'
+                  }`}>
+                    ₹{Number(depositInput).toLocaleString('en-IN')} {depositCollected ? 'collected' : 'pending'}
                   </span>
                 )}
               </div>
             </button>
             {/* Expanded content when toggle ON */}
             {depositEnabled && (
-              <div className="px-3.5 pb-3.5 pt-1 border-t border-slate-100">
-                <label className="label text-xs">Amount collected (₹)</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">₹</span>
-                  <input type="number" min="1" className="input text-sm pl-7" placeholder="e.g. 5000"
-                    value={depositInput} onChange={e => setDepositInput(e.target.value)} autoFocus />
+              <div className="px-3.5 pb-3.5 pt-1 border-t border-slate-100 space-y-3">
+                {/* Amount */}
+                <div>
+                  <label className="label text-xs">Deposit Amount (₹)</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">₹</span>
+                    <input type="number" min="1" className="input text-sm pl-7" placeholder="e.g. 5000"
+                      data-testid="deposit-amount-input"
+                      value={depositInput} onChange={e => setDepositInput(e.target.value)} autoFocus />
+                  </div>
                 </div>
+                {/* Collected now? toggle */}
+                <button type="button"
+                  onClick={() => setDepositCollected(v => !v)}
+                  className={`w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-colors ${
+                    depositCollected
+                      ? 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100'
+                      : 'border-amber-200 bg-amber-50 hover:bg-amber-100'
+                  }`}>
+                  <div className="flex items-center gap-2">
+                    <div className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 ${
+                      depositCollected ? 'bg-emerald-500' : 'bg-amber-400'
+                    }`}>
+                      <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform duration-200 ${
+                        depositCollected ? 'translate-x-[14px]' : 'translate-x-[2px]'
+                      }`} />
+                    </div>
+                    <span className={`text-xs font-semibold ${depositCollected ? 'text-emerald-800' : 'text-amber-800'}`}>
+                      {depositCollected ? 'Collected now' : 'Not collected yet (pending)'}
+                    </span>
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    depositCollected
+                      ? 'text-emerald-700 bg-white border-emerald-200'
+                      : 'text-amber-700 bg-white border-amber-200'
+                  }`}>
+                    {depositCollected ? 'Collected' : 'Pending'}
+                  </span>
+                </button>
                 {Number(depositInput) > 0 && (
-                  <p className="text-[11px] text-emerald-700 font-medium mt-1.5">
-                    ₹{Number(depositInput).toLocaleString('en-IN')} will be recorded as security deposit
+                  <p className={`text-[11px] font-medium ${depositCollected ? 'text-emerald-700' : 'text-amber-600'}`}>
+                    {depositCollected
+                      ? `₹${Number(depositInput).toLocaleString('en-IN')} will be marked as collected`
+                      : `₹${Number(depositInput).toLocaleString('en-IN')} saved as pending — mark collected later from profile`}
                   </p>
                 )}
               </div>
@@ -3366,20 +3459,20 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
               variant="primary"
               disabled={!canAssign}
               loading={submitting || creatingTenant}
+              testid="assign-tenant-btn"
               onClick={async () => {
                 let tenantId = selectedTenantId
 
-                if (assignMode === 'create' && !selectedTenantId) {
+                // Pending new tenant — create now at the moment of assignment
+                if (!selectedTenantId && selectedTenantObj && !selectedTenantObj._id) {
                   setCreatingTenant(true)
                   try {
-                    // estRent already uses the /rent-preview API (which runs calculateRent
-                    // server-side) or falls back to baseRent. The backend overwrites
-                    // rentAmount anyway during assignBed → recalculateRoomRent.
                     const res = await createTenantApi(propertyId, {
-                      name:        newName.trim(),
-                      phone:       newPhone.trim(),
+                      name:        selectedTenantObj.name,
+                      phone:       selectedTenantObj.phone,
                       rentAmount:  estRent,
                       checkInDate: moveInDate || new Date().toISOString().split('T')[0],
+                      status:      'reserved',
                     })
                     tenantId = res.data?.data?._id
                     if (!tenantId) throw new Error('Failed to create tenant')
@@ -3397,7 +3490,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                     rentOverride:        rentOverride ? Number(rentOverride) : undefined,
                     moveInDate:          moveInDate || undefined,
                     deposit:             depositInput ? Number(depositInput) : undefined,
-                    dueDate:             dueDay,
+                    depositCollected:    depositInput ? depositCollected : undefined,
                     advanceDisposition:  bed.status === 'reserved' && (bed.reservation?.reservationAmount ?? 0) > 0
                                            ? advanceDisposition
                                            : undefined,
@@ -4328,8 +4421,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                   </div>
                 ) : rentPreview ? (() => {
                   const rp = rentPreview
-                  const typeLabel = rp.isExtra ? 'Extra Bed' : rp.rentType === 'per_room' ? 'Per Room' : 'Per Bed'
-                  const isPerRoom = rp.rentType === 'per_room' && !rp.isExtra
+                  const typeLabel = rp.isExtra ? 'Extra Bed' : 'Per Bed'
                   return (
                     <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5">
                       <div className="flex items-center justify-between">
@@ -4351,12 +4443,6 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                           </p>
                           <p className="text-[11px] text-slate-400 mt-1">{rp.formula}</p>
                         </div>
-                        {isPerRoom && (
-                          <div className="text-right shrink-0">
-                            <p className="text-[10px] text-slate-400">Base</p>
-                            <p className="text-sm font-bold text-slate-600">₹{rp.baseRent.toLocaleString('en-IN')}</p>
-                          </div>
-                        )}
                       </div>
 
                       {rp.isOverCapacity && (
@@ -4422,6 +4508,121 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                 </div>
               </div>
             )}
+
+          </div>
+        )
+      })()}
+
+      {/* ── EDIT EXTRA BED CHARGE ── */}
+      {view === 'editExtra' && (() => {
+        const baseRent     = room.baseRent ?? 0
+        const chargeValue  = editIsChargeable ? (Number(editExtraCharge) || 0) : 0
+        const rentPreviewEdit = calculateRent({
+          room: { baseRent, rentType: room.rentType },
+          bed:  { isExtra: true, isChargeable: editIsChargeable, extraCharge: chargeValue, rentOverride: null },
+          normalOccupied: 0,
+        }).finalRent
+
+        const handleSaveExtra = async () => {
+          setSubmitting(true)
+          try {
+            await updateExtraBedSettingsApi(propertyId, room._id, bed._id, {
+              isChargeable: editIsChargeable,
+              extraCharge:  chargeValue,
+            })
+            toast(`Extra bed ${bed.bedNumber} updated`, 'success')
+            onSuccess()
+          } catch (err) {
+            toast(err.response?.data?.message || 'Failed to update extra bed', 'error')
+          } finally {
+            setSubmitting(false)
+          }
+        }
+
+        return (
+          <div className="space-y-5">
+
+            {/* Bed identity */}
+            <div className="flex items-center gap-3.5 rounded-2xl border border-violet-100 bg-gradient-to-r from-violet-50 to-white px-4 py-3.5">
+              <div className="h-11 w-11 rounded-xl bg-violet-100 border border-violet-200 flex items-center justify-center shrink-0">
+                <span className="text-base font-black text-violet-600">{bed.bedNumber}</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-slate-800">Extra Bed {bed.bedNumber}</p>
+                <p className="text-xs text-slate-400 mt-0.5">Room {room.roomNumber}</p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-[10px] text-slate-400 mb-0.5">Base Rent</p>
+                <p className="text-sm font-bold text-slate-600">₹{baseRent.toLocaleString('en-IN')}</p>
+              </div>
+            </div>
+
+            {/* Chargeable toggle */}
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-700">Chargeable?</p>
+                <p className="text-xs text-slate-400 mt-0.5">Does this bed have a monthly charge?</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={editIsChargeable}
+                onClick={() => setEditIsChargeable(v => !v)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ${editIsChargeable ? 'bg-violet-500' : 'bg-slate-200'}`}
+              >
+                <span className={`inline-block rounded-full bg-white shadow-md transition-transform duration-200 ${editIsChargeable ? 'translate-x-[22px]' : 'translate-x-[3px]'}`}
+                  style={{ height: '18px', width: '18px' }} />
+              </button>
+            </div>
+
+            {/* Custom charge input */}
+            {editIsChargeable && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                  Custom Monthly Charge
+                  <span className="ml-1.5 text-slate-400 font-normal">(leave blank to use room base rent)</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-semibold">₹</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editExtraCharge}
+                    onChange={e => setEditExtraCharge(e.target.value)}
+                    placeholder={`${baseRent} (base rent)`}
+                    className="w-full rounded-xl border border-slate-200 bg-white pl-7 pr-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Rent preview */}
+            <div className="flex items-center justify-between rounded-xl bg-violet-50 border border-violet-100 px-4 py-3">
+              <span className="text-xs font-semibold text-violet-600">Tenant will pay</span>
+              <span className="text-sm font-bold text-violet-700">
+                {editIsChargeable ? `₹${rentPreviewEdit.toLocaleString('en-IN')} / mo` : 'Free (₹0)'}
+              </span>
+            </div>
+
+            {bed.status === 'occupied' && (
+              <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-3">
+                <AlertTriangle size={13} className="text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  The current tenant's rent will be recalculated immediately.
+                </p>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => setView('actions')}
+                className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                Cancel
+              </button>
+              <button type="button" onClick={handleSaveExtra} disabled={submitting}
+                className="flex-1 rounded-xl bg-violet-600 hover:bg-violet-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors disabled:opacity-60">
+                {submitting ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
 
           </div>
         )
@@ -4515,7 +4716,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
 
       {/* ── CHANGE ROOM ── */}
       {view === 'changeRoom' && (() => {
-        const otherRooms   = allRooms.filter(r => r._id !== room._id && r.isActive !== false && r.status === 'available')
+        const otherRooms   = allRooms.filter(r => r._id !== room._id && r.isActive !== false && r.status !== 'full')
         const targetRoom   = otherRooms.find(r => r._id === targetRoomId) ?? null
         const vacantBeds   = allTargetBeds.filter(b => b.status === 'vacant')
 
@@ -4686,10 +4887,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
                 )}
                 {!crRentPreview && !crRentLoading && (
                   <p className="text-[10px] text-slate-400 leading-relaxed">
-                    {targetRoom.rentType === 'per_room'
-                      ? `Equal split — ₹${targetRoom.baseRent?.toLocaleString('en-IN')} shared among all normal tenants`
-                      : `Fixed — ₹${targetRoom.baseRent?.toLocaleString('en-IN')} per bed`
-                    }
+                    Fixed — ₹{targetRoom.baseRent?.toLocaleString('en-IN')} per bed
                   </p>
                 )}
               </div>
@@ -4715,28 +4913,6 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
             )
           })()}
 
-          {/* ── Impact on source room co-tenants ── */}
-          {selectedBedId && !genderMismatch && !sameRoom && (() => {
-            const sourceRentType = room.rentType
-            if (sourceRentType !== 'per_room') return null
-            const divisorNow  = bed.tenant?.billingSnapshot?.divisorUsed ?? 1
-            if (divisorNow <= 1) return null  // only tenant; no one else affected
-            const remaining   = divisorNow - 1
-            const newSplitEst = Math.ceil((room.baseRent ?? 0) / remaining)
-            return (
-              <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-3">
-                <AlertTriangle size={13} className="text-amber-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs font-bold text-amber-800">Rent impact on Room {room.roomNumber}</p>
-                  <p className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
-                    {remaining} remaining tenant{remaining !== 1 ? 's' : ''} will see rent increase from{' '}
-                    <span className="font-semibold">₹{currentRent.toLocaleString('en-IN')}</span> to approx.{' '}
-                    <span className="font-semibold">₹{newSplitEst.toLocaleString('en-IN')}</span> (equal split).
-                  </p>
-                </div>
-              </div>
-            )
-          })()}
 
           {/* ── Transfer summary + action ── */}
           {canConfirm && (() => {
@@ -4781,7 +4957,7 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
 
           <div className="space-y-2 pt-1">
             <div className="flex gap-2">
-              <button className="btn-secondary flex-1" onClick={() => setView('actions')}>
+              <button className="btn-secondary flex-1" onClick={() => initialView === 'changeRoom' ? onClose() : setView('actions')}>
                 Cancel
               </button>
               <button
@@ -5015,41 +5191,37 @@ const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occupancy, 
 //  Summary KPI Cards
 // ══════════════════════════════════════════════════════════════════════════════
 const SummaryCards = ({ stats }) => {
-  const pct = stats.beds > 0 ? Math.round((stats.occupied / stats.beds) * 100) : 0
+  // Percentage = normal-beds-only occupancy, consistent with room-card badges.
+  // stats.occupied includes extra beds; subtract extraOccupied to get normal only.
+  const normalOccupied = stats.occupied - (stats.extraOccupied ?? 0)
+  const pct = stats.beds > 0 ? Math.round((normalOccupied / stats.beds) * 100) : 0
   const cards = [
-    { label: 'Total Rooms', value: stats.rooms, icon: Home, iconBg: 'bg-primary-50', iconColor: 'text-primary-500' },
-    { label: 'Total Beds',  value: stats.beds,  icon: BedDouble, iconBg: 'bg-slate-50', iconColor: 'text-slate-500' },
-    { label: 'Occupied',    value: stats.occupied, icon: Users, iconBg: 'bg-red-50', iconColor: 'text-red-500',
-      badge: `${pct}%`, badgeBg: 'bg-red-50 border border-red-200 text-red-700',
-      bar: pct, barColor: 'bg-red-500' },
-    { label: 'Vacant', value: stats.vacant, icon: BedDouble, iconBg: 'bg-emerald-50', iconColor: 'text-emerald-500',
-      bar: stats.beds > 0 ? Math.round((stats.vacant / stats.beds) * 100) : 0, barColor: 'bg-emerald-500' },
+    { label: 'Total Rooms', value: stats.rooms, icon: Home,     iconCls: 'bg-primary-50 border-primary-100 text-primary-500' },
+    { label: 'Total Beds',  value: stats.beds,  icon: BedDouble, iconCls: 'bg-slate-50 border-slate-200 text-slate-500',
+      note: stats.extraTotal > 0 ? `+${stats.extraTotal} extra` : null },
+    { label: 'Occupied',    value: stats.occupied, icon: Users,  iconCls: 'bg-red-50 border-red-100 text-red-500',
+      note: stats.extraOccupied > 0 ? `+${stats.extraOccupied} extra` : null,
+      badge: `${pct}%` },
+    { label: 'Vacant',      value: stats.vacant, icon: BedDouble, iconCls: 'bg-emerald-50 border-emerald-100 text-emerald-500',
+      note: stats.extraVacant > 0 ? `+${stats.extraVacant} extra` : null },
   ]
 
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      {cards.map(({ label, value, icon: Icon, iconBg, iconColor, badge, badgeBg, bar, barColor }) => (
-        <div key={label} className="card p-4 flex flex-col gap-2.5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-start gap-2.5 min-w-0">
-              <div className={`shrink-0 rounded-xl p-2 ${iconBg}`}>
-                <Icon size={16} className={iconColor} />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold text-slate-400 truncate uppercase tracking-wider">{label}</p>
-                <p className="text-xl font-extrabold text-slate-800 leading-tight tabular-nums">{value ?? 0}</p>
-              </div>
-            </div>
-            {badge && (
-              <span className={`shrink-0 text-[11px] font-semibold rounded-full px-2 py-0.5 ${badgeBg}`}>{badge}</span>
-            )}
+      {cards.map(({ label, value, note, icon: Icon, iconCls, badge }) => (
+        <div key={label} className="rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 active:scale-[0.98]">
+          <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${iconCls}`}>
+            <Icon size={15} />
           </div>
-          {bar !== undefined && (
-            <div className="h-1 w-full rounded-full bg-slate-100">
-              <div className={`h-1 rounded-full transition-all duration-700 ${barColor}`}
-                style={{ width: `${Math.min(bar, 100)}%` }} />
-            </div>
-          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-[18px] font-bold leading-none tabular-nums text-slate-800">
+              {value ?? 0}
+              {badge && <span className="ml-1.5 text-[11px] font-semibold text-red-500">{badge}</span>}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5 font-medium">
+              {label}{note && <span className="ml-1 text-violet-500 font-semibold">· {note}</span>}
+            </p>
+          </div>
         </div>
       ))}
     </div>
@@ -5288,7 +5460,7 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
   const [notesOpen, setNotesOpen] = useState(false)
   const [form, setForm] = useState({
     roomNumber: '', floor: '0', baseRent: '',
-    rentType: 'per_bed', hasAC: false, hasAttachedBathroom: false,
+    hasAC: false, hasAttachedBathroom: false,
     category: 'standard', gender: 'male', notes: '',
   })
   const [errors, setErrors] = useState({})
@@ -5306,21 +5478,14 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
   }
 
   // Rent preview — routed through the shared calculateRent engine.
-  // normalOccupied for per_room preview = full capacity (worst case / "if full").
-  // This guarantees the displayed numbers match what the backend will store.
   const baseRentNum = Number(form.baseRent) || 0
   const _previewBed = { isExtra: false, rentOverride: null, isChargeable: true, extraCharge: 0 }
   const _rentResult = baseRentNum > 0
-    ? calculateRent({
-        room:           { baseRent: baseRentNum, rentType: form.rentType },
-        bed:            _previewBed,
-        normalOccupied: form.rentType === 'per_room' ? Math.max(capacity, 1) : 1,
-      })
+    ? calculateRent({ room: { baseRent: baseRentNum }, bed: _previewBed, normalOccupied: 1 })
     : null
   const perTenantRent   = _rentResult?.finalRent ?? 0
   const perTenantSource = _rentResult?.source     ?? null
-  // totalIfFull: per_bed → each-tenant × beds; per_room → the fixed room total
-  const totalIfFull = form.rentType === 'per_bed' ? perTenantRent * capacity : baseRentNum
+  const totalIfFull     = perTenantRent * capacity
 
   // Bed label preview — same algorithm as backend generateBedLabel
   const PREVIEW_MAX = 8
@@ -5362,12 +5527,11 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
   const canSubmit = form.roomNumber.trim() && form.baseRent && !saving
 
   return (
-    <Modal onClose={onClose} size="lg" disableBackdropClose>
-      <form onSubmit={handleSubmit} className="-mx-5 -mt-5 flex flex-col">
+    <Modal onClose={onClose} size="lg" disableBackdropClose bodyClassName="overflow-hidden px-5 py-5">
+      <form onSubmit={handleSubmit} className="-mx-5 -mt-5 flex flex-col max-h-[90vh]">
 
         {/* ── Header ── */}
         <div className="shrink-0 rounded-t-2xl overflow-hidden border-b border-slate-100">
-          <div className="h-0.5 w-full bg-gradient-to-r from-primary-400 via-primary-500 to-primary-600" />
           <div className="px-6 py-4 flex items-start justify-between gap-4">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-50 border border-primary-100 mt-0.5">
@@ -5403,6 +5567,7 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
                 </label>
                 <input
                   autoFocus
+                  data-testid="room-number-input"
                   className={`input font-bold tracking-wider uppercase ${
                     errors.roomNumber ? 'border-red-400 focus:ring-red-400/20 focus:border-red-400' : ''
                   }`}
@@ -5418,7 +5583,7 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
               </div>
               <div className="w-24 shrink-0">
                 <label className="label text-[11px]">Floor</label>
-                <input type="number" min="0" className="input text-center"
+                <input type="number" min="0" className="input text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   value={form.floor} onChange={e => set('floor', e.target.value)} />
               </div>
             </div>
@@ -5498,7 +5663,7 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
               <div>
                 <label className="label text-[11px]">Number of beds</label>
                 <input type="number" min="1" max="20"
-                  className={`input w-28 text-center font-semibold tabular-nums ${errors.capacity ? 'border-red-400 focus:ring-red-400/20' : ''}`}
+                  className={`input w-28 text-center font-semibold tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${errors.capacity ? 'border-red-400 focus:ring-red-400/20' : ''}`}
                   placeholder="4"
                   value={customCap}
                   onChange={e => { setCustomCap(e.target.value); setErrors(er => ({ ...er, capacity: null })) }}
@@ -5524,13 +5689,6 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
                   <p className="text-xs text-slate-500">
                     {capacity} bed{capacity !== 1 ? 's' : ''} will be created automatically
                   </p>
-                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold
-                    ${form.gender === 'male'   ? 'bg-sky-50 border-sky-200 text-sky-600' :
-                      form.gender === 'female' ? 'bg-pink-50 border-pink-200 text-pink-600' :
-                      'bg-slate-50 border-slate-200 text-slate-400'}
-                  `}>
-                    👤 {form.gender === 'male' ? 'Male Only' : form.gender === 'female' ? 'Female Only' : 'Unisex'}
-                  </span>
                 </div>
               </div>
               {/* Numbering style toggle */}
@@ -5575,11 +5733,12 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
             <div className="flex gap-4 items-start">
               {/* Base Rent */}
               <div className="flex-1">
-                <label className="label text-[11px]">Base Rent <span className="text-red-400">*</span></label>
+                <label className="label text-[11px]">Rent per Bed <span className="text-red-400">*</span></label>
                 <div className="relative">
                   <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-sm pointer-events-none select-none">₹</span>
                   <input type="number" min="0"
-                    className={`input pl-8 tabular-nums font-semibold text-slate-800 ${
+                    data-testid="base-rent-input"
+                    className={`input pl-8 tabular-nums font-semibold text-slate-800 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                       errors.baseRent ? 'border-red-400 focus:ring-red-400/20 focus:border-red-400' : ''
                     }`}
                     placeholder="8000"
@@ -5594,102 +5753,36 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
                 )}
               </div>
 
-              {/* Billing method */}
-              <div className="shrink-0">
-                <label className="label text-[11px]">Billing</label>
-                <div className="flex gap-1.5">
-                  {[
-                    { v: 'per_bed',  l: 'Per Bed',   sub: 'Each tenant' },
-                    { v: 'per_room', l: 'Split',      sub: 'Divide total' },
-                  ].map(opt => (
-                    <button key={opt.v} type="button" onClick={() => set('rentType', opt.v)}
-                      className={`flex flex-col items-center text-center rounded-xl border px-3.5 py-2 transition-all duration-150 active:scale-[.97]
-                        ${form.rentType === opt.v
-                          ? 'border-primary-400 bg-primary-50 shadow-sm shadow-primary-200/30'
-                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'
-                        }`}>
-                      <span className={`text-[11px] font-bold leading-tight ${form.rentType === opt.v ? 'text-primary-700' : 'text-slate-600'}`}>
-                        {opt.l}
-                      </span>
-                      <span className={`text-[9px] mt-0.5 ${form.rentType === opt.v ? 'text-primary-500' : 'text-slate-400'}`}>
-                        {opt.sub}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
 
             {/* System rule note */}
             <p className="text-[10px] text-slate-400 flex items-center gap-1">
               <CheckCircle2 size={9} className="shrink-0 text-slate-300" />
-              Rent is automatically calculated based on room configuration and occupancy.
+              This is the rent charged per bed. Each tenant pays this amount independently.
             </p>
 
             {/* Live Rent Preview */}
             {baseRentNum > 0 && (
-              <div className={`rounded-xl border px-5 py-4 transition-all duration-300 ${
-                form.rentType === 'per_bed' ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'
-              }`}>
-                {form.rentType === 'per_bed' ? (
-                  <div className="flex items-center gap-6">
-                    <div className="flex-1">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-1">Each tenant pays</p>
-                      <p className="text-[28px] font-black text-emerald-700 leading-none tabular-nums">
-                        ₹{perTenantRent.toLocaleString('en-IN')}
-                        <span className="text-xs font-medium text-emerald-500 ml-1">/mo</span>
-                      </p>
-                      {perTenantSource && (
-                        <p className="text-[9px] text-emerald-500 mt-0.5">{SOURCE_LABELS[perTenantSource] ?? perTenantSource}</p>
-                      )}
-                      {DEBUG_RENT && _rentResult && (
-                        <div className="mt-1 rounded bg-slate-100 px-1.5 py-1 font-mono text-[9px] text-slate-500 space-y-0.5">
-                          <p>Source: {_rentResult.source}</p>
-                          {_rentResult.meta?.divisor != null && <p>Divisor: {_rentResult.meta.divisor}</p>}
-                        </div>
-                      )}
-                    </div>
-                    <div className="shrink-0 h-10 w-px bg-emerald-200" />
-                    <div className="flex-1">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-1">
-                        Total if full ({capacity} bed{capacity !== 1 ? 's' : ''})
-                      </p>
-                      <p className="text-[18px] font-bold text-emerald-700 leading-none tabular-nums">
-                        ₹{totalIfFull.toLocaleString('en-IN')}
-                        <span className="text-xs font-medium text-emerald-500 ml-1">/mo</span>
-                      </p>
-                    </div>
+              <div className="rounded-xl border px-5 py-4 bg-emerald-50 border-emerald-200">
+                <div className="flex items-center gap-6">
+                  <div className="flex-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-1">Each tenant pays</p>
+                    <p className="text-[28px] font-black text-emerald-700 leading-none tabular-nums">
+                      ₹{perTenantRent.toLocaleString('en-IN')}
+                      <span className="text-xs font-medium text-emerald-500 ml-1">/mo</span>
+                    </p>
                   </div>
-                ) : (
-                  <div className="flex items-center gap-6">
-                    <div className="flex-1">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-blue-600 mb-1">Room rent</p>
-                      <p className="text-[28px] font-black text-blue-700 leading-none tabular-nums">
-                        ₹{totalIfFull.toLocaleString('en-IN')}
-                        <span className="text-xs font-medium text-blue-500 ml-1">/mo</span>
-                      </p>
-                    </div>
-                    <div className="shrink-0 h-10 w-px bg-blue-200" />
-                    <div className="flex-1">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-blue-600 mb-1">
-                        Per person (if full)
-                      </p>
-                      <p className="text-[18px] font-bold text-blue-700 leading-none tabular-nums">
-                        ₹{perTenantRent.toLocaleString('en-IN')}
-                        <span className="text-xs font-medium text-blue-500 ml-1">/mo</span>
-                      </p>
-                      {perTenantSource && (
-                        <p className="text-[9px] text-blue-500 mt-0.5">{SOURCE_LABELS[perTenantSource] ?? perTenantSource}</p>
-                      )}
-                      {DEBUG_RENT && _rentResult && (
-                        <div className="mt-1 rounded bg-slate-100 px-1.5 py-1 font-mono text-[9px] text-slate-500 space-y-0.5">
-                          <p>Source: {_rentResult.source}</p>
-                          {_rentResult.meta?.divisor != null && <p>Divisor: {_rentResult.meta.divisor}</p>}
-                        </div>
-                      )}
-                    </div>
+                  <div className="shrink-0 h-10 w-px bg-emerald-200" />
+                  <div className="flex-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-1">
+                      Total if full ({capacity} bed{capacity !== 1 ? 's' : ''})
+                    </p>
+                    <p className="text-[18px] font-bold text-emerald-700 leading-none tabular-nums">
+                      ₹{totalIfFull.toLocaleString('en-IN')}
+                      <span className="text-xs font-medium text-emerald-500 ml-1">/mo</span>
+                    </p>
                   </div>
-                )}
+                </div>
               </div>
             )}
           </div>
@@ -5788,6 +5881,7 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
             Cancel
           </button>
           <button type="submit" disabled={!canSubmit}
+            data-testid="create-room-btn"
             className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white
               bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
               disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm shadow-primary-200/50 active:scale-[0.98]">
@@ -5836,7 +5930,6 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
   const [form, setForm] = useState({
     floor:               String(initial.floor ?? 0),
     baseRent:            String(initial.baseRent ?? ''),
-    rentType:            initial.rentType ?? 'per_bed',
     hasAC:               initial.hasAC ?? false,
     hasAttachedBathroom: initial.hasAttachedBathroom ?? false,
     category:            initial.category ?? 'standard',
@@ -5858,36 +5951,30 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
   const oldCapacity    = initial.capacity
   const newBaseRent    = Number(form.baseRent) || 0
   const oldBaseRent    = initial.baseRent ?? 0
-  const newRentType    = form.rentType
-  const oldRentType    = initial.rentType
 
   const typeFromCap = c =>
     c === 1 ? 'single' : c === 2 ? 'double' : c === 3 ? 'triple' : 'dormitory'
   const newType = typeFromCap(newCapacity)
   const oldType = initial.type
 
-  // Rent type locked if any beds are occupied
-  const rentTypeLocked = occupiedCount > 0
-
   // ── Change detection ───────────────────────────────────────────────────────
   const capacityChanged = newCapacity !== oldCapacity
   const baseRentChanged = newBaseRent !== oldBaseRent && newBaseRent > 0
-  const rentTypeChanged = newRentType !== oldRentType
   const typeChanged     = newType !== oldType
   const amenitiesChanged = form.hasAC !== initial.hasAC ||
     form.hasAttachedBathroom !== initial.hasAttachedBathroom
   const otherChanged = form.floor !== String(initial.floor ?? 0) ||
     form.category !== initial.category || form.gender !== initial.gender ||
     (form.notes.trim() !== (initial.notes ?? '').trim())
-  const anyChange = capacityChanged || baseRentChanged || rentTypeChanged ||
-    amenitiesChanged || otherChanged
+  const anyChange = capacityChanged || baseRentChanged || amenitiesChanged || otherChanged
+
+  const fmt = n => `₹${(n ?? 0).toLocaleString('en-IN')}`
 
   // ── Change summary list ────────────────────────────────────────────────────
   // Ordered array of { label, from, to } — rendered in the "What Changed" block.
   const changeList = []
   if (capacityChanged)                               changeList.push({ label: 'Capacity',  from: `${oldCapacity} beds`,                                     to: `${newCapacity} beds` })
   if (baseRentChanged)                               changeList.push({ label: 'Base Rent', from: fmt(oldBaseRent),                                           to: fmt(newBaseRent) })
-  if (rentTypeChanged)                               changeList.push({ label: 'Billing',   from: oldRentType === 'per_bed' ? 'Per Bed' : 'Split Room',       to: newRentType === 'per_bed' ? 'Per Bed' : 'Split Room' })
   if (form.gender !== initial.gender)                changeList.push({ label: 'Gender',    from: initial.gender,                                             to: form.gender })
   if (form.hasAC !== initial.hasAC)                  changeList.push({ label: 'AC',        from: initial.hasAC ? 'On' : 'Off',                              to: form.hasAC ? 'On' : 'Off' })
   if (form.hasAttachedBathroom !== initial.hasAttachedBathroom)
@@ -5899,8 +5986,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
   const capacityTooLow    = newCapacity < occupiedCount
   const typeBlockOccupied = typeChanged && occupiedCount > 0
   const typeBlockExtra    = typeChanged && extraCount > 0
-  const rentTypeBlock     = rentTypeChanged && occupiedCount > 0
-  const isHardBlocked     = capacityTooLow || typeBlockOccupied || typeBlockExtra || rentTypeBlock
+  const isHardBlocked     = capacityTooLow || typeBlockOccupied || typeBlockExtra
 
   // ── Capacity impact ────────────────────────────────────────────────────────
   const capDiff = newCapacity - oldCapacity  // +N or -N
@@ -5919,7 +6005,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
     if (!bed.tenant) return { finalRent: 0, source: null, meta: {} }
     const r = newBaseRent > 0 ? newBaseRent : oldBaseRent
     return calculateRent({
-      room: { baseRent: r, rentType: newRentType },
+      room: { baseRent: r },
       bed:  {
         isExtra:      bed.isExtra ?? false,
         isChargeable: bed.isChargeable ?? true,
@@ -5932,7 +6018,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
 
   const normalOccupied = occupiedBeds.filter(b => !b.isExtra).length
   const newNormalOcc   = typeChanged
-    ? newCapacity   // after type change, all beds are new, so divisor = full capacity
+    ? newCapacity   // after type change, all beds are new
     : normalOccupied
 
   const tenantImpact = occupiedBeds.map(bed => {
@@ -5971,7 +6057,6 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
       capacity:            newCapacity,
       type:                newType,
       baseRent:            newBaseRent,
-      rentType:            newRentType,
       gender:              form.gender,
       hasAC:               form.hasAC,
       hasAttachedBathroom: form.hasAttachedBathroom,
@@ -5982,28 +6067,22 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
 
   const isRiskyChange = typeChanged || (baseRentChanged && occupiedCount > 0)
   const canSubmit = anyChange && !isHardBlocked && !saving && (!bedsLoading)
-  const fmt = n => `₹${(n ?? 0).toLocaleString('en-IN')}`
 
   // ── Final State Preview rent values (via shared engine) ───────────────────
   const _fspBed    = { isExtra: false, rentOverride: null, isChargeable: true, extraCharge: 0 }
   const _fspResult = newBaseRent > 0
-    ? calculateRent({
-        room:           { baseRent: newBaseRent, rentType: newRentType },
-        bed:            _fspBed,
-        normalOccupied: newRentType === 'per_room' ? Math.max(newCapacity, 1) : 1,
-      })
+    ? calculateRent({ room: { baseRent: newBaseRent }, bed: _fspBed, normalOccupied: 1 })
     : null
   const fspPerTenant = _fspResult?.finalRent ?? 0
   const fspSource    = _fspResult?.source    ?? null
-  const fspTotal     = newRentType === 'per_bed' ? fspPerTenant * newCapacity : newBaseRent
+  const fspTotal     = fspPerTenant * newCapacity
 
   return (
-    <Modal onClose={onClose} size="lg" disableBackdropClose>
+    <Modal onClose={onClose} size="lg" disableBackdropClose bodyClassName="overflow-hidden px-5 py-5">
       <form onSubmit={handleSubmit} className="-mx-5 -mt-5 flex flex-col max-h-[90vh]">
 
         {/* ── Header ── */}
         <div className="shrink-0 rounded-t-2xl overflow-hidden border-b border-slate-100">
-          <div className="h-0.5 w-full bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500" />
           <div className="px-6 py-4 flex items-start justify-between gap-4">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 border border-amber-100 mt-0.5">
@@ -6105,7 +6184,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
             <div className="flex gap-4 items-start">
               <div className="w-28 shrink-0">
                 <label className="label text-[11px]">Floor</label>
-                <input type="number" min="0" className="input text-center"
+                <input type="number" min="0" className="input text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   value={form.floor} onChange={e => set('floor', e.target.value)} />
               </div>
               <div className="flex-1">
@@ -6254,7 +6333,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
             <div className="flex gap-4 items-start">
               <div className="flex-1">
                 <div className="flex items-center justify-between mb-1">
-                  <label className="label text-[11px] mb-0">Base Rent <span className="text-red-400">*</span></label>
+                  <label className="label text-[11px] mb-0">Rent per Bed <span className="text-red-400">*</span></label>
                   {baseRentChanged && (
                     <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600">
                       Updated
@@ -6264,7 +6343,8 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
                 <div className="relative">
                   <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-sm pointer-events-none">₹</span>
                   <input type="number" min="0"
-                    className={`input pl-8 font-semibold tabular-nums ${errors.baseRent ? 'border-red-400' : baseRentChanged ? 'border-emerald-400 ring-1 ring-emerald-200/60' : ''}`}
+                    data-testid="edit-base-rent-input"
+                    className={`input pl-8 font-semibold tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${errors.baseRent ? 'border-red-400' : baseRentChanged ? 'border-emerald-400 ring-1 ring-emerald-200/60' : ''}`}
                     placeholder={String(oldBaseRent)}
                     value={form.baseRent}
                     onChange={e => set('baseRent', e.target.value)}
@@ -6282,53 +6362,6 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
                 )}
               </div>
 
-              <div className="shrink-0">
-                <div className="flex items-center justify-between mb-1 gap-3">
-                  <label className="label text-[11px] mb-0">Billing</label>
-                  {rentTypeChanged && !rentTypeBlock && (
-                    <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600">
-                      Updated
-                    </span>
-                  )}
-                </div>
-                <div className="flex gap-1.5">
-                  {[
-                    { v: 'per_bed',  l: 'Per Bed',  sub: 'Each pays' },
-                    { v: 'per_room', l: 'Split',     sub: 'Divided' },
-                  ].map(opt => {
-                    const active = newRentType === opt.v
-                    const locked = rentTypeLocked && opt.v !== newRentType
-                    return (
-                      <button key={opt.v} type="button"
-                        disabled={rentTypeLocked}
-                        onClick={() => !rentTypeLocked && set('rentType', opt.v)}
-                        className={`flex flex-col items-center text-center rounded-xl border px-3.5 py-2 transition-all duration-150
-                          ${locked ? 'opacity-40 cursor-not-allowed border-slate-200 bg-slate-50'
-                            : active
-                              ? 'border-primary-400 bg-primary-50 shadow-sm active:scale-[.97]'
-                              : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 active:scale-[.97]'
-                          }`}>
-                        <span className={`text-[11px] font-bold ${active && !locked ? 'text-primary-700' : 'text-slate-600'}`}>{opt.l}</span>
-                        <span className={`text-[9px] mt-0.5 ${active && !locked ? 'text-primary-500' : 'text-slate-400'}`}>{opt.sub}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                {rentTypeBlock && (
-                  <p className="mt-1.5 text-[10px] text-amber-700 font-semibold flex items-center gap-1">
-                    <Lock size={9} /> Vacate all tenants to change
-                  </p>
-                )}
-                {rentTypeLocked && !rentTypeChanged && (
-                  <p className="mt-1.5 text-[10px] text-slate-400 flex items-center gap-1">
-                    <Lock size={9} /> Locked while occupied
-                  </p>
-                )}
-                <p className="mt-1.5 text-[10px] text-slate-400 flex items-center gap-1">
-                  <CheckCircle2 size={9} className="text-slate-300 shrink-0" />
-                  Rent is automatically calculated based on room configuration and occupancy.
-                </p>
-              </div>
             </div>
 
             {/* Amenities + Category in 2 columns */}
@@ -6429,7 +6462,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
                 )}
 
                 {/* Before / After rent card */}
-                {(baseRentChanged || rentTypeChanged) && (
+                {baseRentChanged && (
                   <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
                     <div className="grid grid-cols-2 divide-x divide-slate-200">
                       <div className="px-4 py-3 bg-slate-50">
@@ -6438,9 +6471,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
                           {fmt(oldBaseRent)}
                           <span className="text-[10px] font-medium text-slate-400 ml-1">/mo</span>
                         </p>
-                        <p className="text-[10px] text-slate-400 mt-1">
-                          {oldRentType === 'per_bed' ? 'Per Bed · each tenant' : 'Split · room total'}
-                        </p>
+                        <p className="text-[10px] text-slate-400 mt-1">Per Bed · each tenant</p>
                       </div>
                       <div className="px-4 py-3 bg-emerald-50/70">
                         <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-2">After</p>
@@ -6448,16 +6479,14 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
                           {fmt(newBaseRent > 0 ? newBaseRent : oldBaseRent)}
                           <span className="text-[10px] font-medium text-emerald-400 ml-1">/mo</span>
                         </p>
-                        <p className="text-[10px] text-emerald-600 mt-1">
-                          {newRentType === 'per_bed' ? 'Per Bed · each tenant' : 'Split · room total'}
-                        </p>
+                        <p className="text-[10px] text-emerald-600 mt-1">Per Bed · each tenant</p>
                       </div>
                     </div>
                   </div>
                 )}
 
                 {/* Rent impact simulation */}
-                {(baseRentChanged || rentTypeChanged) && tenantImpact.length > 0 && (
+                {baseRentChanged && tenantImpact.length > 0 && (
                   <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
                     <div className="px-4 py-2.5 border-b border-slate-100 bg-slate-50">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Tenant Rent Impact</p>
@@ -6500,7 +6529,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
                 )}
 
                 {/* Recalculate notice when tenants exist + rent is changing */}
-                {(baseRentChanged || rentTypeChanged) && tenantImpact.length > 0 && (
+                {baseRentChanged && tenantImpact.length > 0 && (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-2.5">
                     <div className="flex items-start gap-2">
                       <AlertTriangle size={13} className="text-amber-500 shrink-0 mt-0.5" />
@@ -6522,7 +6551,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
                 )}
 
                 {/* Warning: rent change won't auto-apply unless backend recalculates */}
-                {(baseRentChanged || rentTypeChanged) && tenantImpact.length === 0 && (
+                {baseRentChanged && tenantImpact.length === 0 && (
                   <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5">
                     <AlertTriangle size={13} className="text-amber-500 shrink-0 mt-0.5" />
                     <p className="text-xs text-amber-700">No tenants currently assigned — rent change will apply to new assignments.</p>
@@ -6587,45 +6616,28 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
 
                 {/* Rent preview — values from shared calculateRent engine */}
                 {newBaseRent > 0 && (
-                  <div className={`rounded-xl border px-4 py-3 flex items-center gap-5 ${
-                    newRentType === 'per_bed' ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'
-                  }`}>
+                  <div className="rounded-xl border px-4 py-3 flex items-center gap-5 bg-emerald-50 border-emerald-200">
                     <div>
-                      <p className={`text-[9px] font-black uppercase tracking-widest mb-0.5 ${newRentType === 'per_bed' ? 'text-emerald-600' : 'text-blue-600'}`}>
-                        {newRentType === 'per_bed' ? 'Each tenant pays' : 'Room rent'}
-                      </p>
-                      <p className={`text-[22px] font-black leading-none tabular-nums ${newRentType === 'per_bed' ? 'text-emerald-700' : 'text-blue-700'}`}>
-                        {newRentType === 'per_bed' ? fmt(fspPerTenant) : fmt(newBaseRent)}
-                        <span className={`text-[11px] font-medium ml-1 ${newRentType === 'per_bed' ? 'text-emerald-500' : 'text-blue-500'}`}>/mo</span>
-                      </p>
-                      {fspSource && (
-                        <p className={`text-[9px] mt-0.5 ${newRentType === 'per_bed' ? 'text-emerald-500' : 'text-blue-500'}`}>
-                          {SOURCE_LABELS[fspSource] ?? fspSource}
-                        </p>
-                      )}
-                      {DEBUG_RENT && _fspResult && (
-                        <div className="mt-1 rounded bg-slate-100 px-1.5 py-1 font-mono text-[9px] text-slate-500 space-y-0.5">
-                          <p>Source: {_fspResult.source}</p>
-                          {_fspResult.meta?.divisor != null && <p>Divisor: {_fspResult.meta.divisor}</p>}
-                        </div>
-                      )}
-                    </div>
-                    <div className={`h-10 w-px ${newRentType === 'per_bed' ? 'bg-emerald-200' : 'bg-blue-200'}`} />
-                    <div>
-                      <p className={`text-[9px] font-black uppercase tracking-widest mb-0.5 ${newRentType === 'per_bed' ? 'text-emerald-600' : 'text-blue-600'}`}>
-                        {newRentType === 'per_bed' ? `Total (${newCapacity} beds)` : 'Per person (if full)'}
-                      </p>
-                      <p className={`text-[16px] font-bold leading-none tabular-nums ${newRentType === 'per_bed' ? 'text-emerald-700' : 'text-blue-700'}`}>
-                        {newRentType === 'per_bed' ? fmt(fspTotal) : fmt(fspPerTenant)}
-                        <span className={`text-[10px] font-medium ml-1 ${newRentType === 'per_bed' ? 'text-emerald-500' : 'text-blue-500'}`}>/mo</span>
+                      <p className="text-[9px] font-black uppercase tracking-widest mb-0.5 text-emerald-600">Each tenant pays</p>
+                      <p className="text-[22px] font-black leading-none tabular-nums text-emerald-700">
+                        {fmt(fspPerTenant)}
+                        <span className="text-[11px] font-medium ml-1 text-emerald-500">/mo</span>
                       </p>
                     </div>
-                    <div className={`h-10 w-px ${newRentType === 'per_bed' ? 'bg-emerald-200' : 'bg-blue-200'}`} />
+                    <div className="h-10 w-px bg-emerald-200" />
                     <div>
-                      <p className={`text-[9px] font-black uppercase tracking-widest mb-0.5 ${newRentType === 'per_bed' ? 'text-emerald-600' : 'text-blue-600'}`}>
-                        Occupancy
+                      <p className="text-[9px] font-black uppercase tracking-widest mb-0.5 text-emerald-600">
+                        Total ({newCapacity} beds)
                       </p>
-                      <p className={`text-[16px] font-bold leading-none tabular-nums ${newRentType === 'per_bed' ? 'text-emerald-700' : 'text-blue-700'}`}>
+                      <p className="text-[16px] font-bold leading-none tabular-nums text-emerald-700">
+                        {fmt(fspTotal)}
+                        <span className="text-[10px] font-medium ml-1 text-emerald-500">/mo</span>
+                      </p>
+                    </div>
+                    <div className="h-10 w-px bg-emerald-200" />
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-widest mb-0.5 text-emerald-600">Occupancy</p>
+                      <p className="text-[16px] font-bold leading-none tabular-nums text-emerald-700">
                         {occupiedCount} / {newCapacity}
                       </p>
                     </div>
@@ -6692,6 +6704,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
         <div className="shrink-0 px-6 pb-5 pt-4 border-t border-slate-100 flex items-center gap-3">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
           <button type="submit" disabled={!canSubmit}
+            data-testid="save-room-btn"
             className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white
               transition-all shadow-sm active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed
               ${isRiskyChange
@@ -6716,8 +6729,7 @@ const EditRoomModal = ({ room: initial, propertyId, onSubmit, onClose, saving })
 }
 
 const RoomFormModal = ({ mode = 'add', initialData, onSubmit, onClose, saving, occupiedBeds = 0 }) => {
-  const isEdit         = mode === 'edit'
-  const rentTypeLocked = isEdit && occupiedBeds > 0
+  const isEdit = mode === 'edit'
   const bnLocked       = isEdit  // immutable after creation
 
   const [typeChangeAcknowledged, setTypeChangeAcknowledged] = useState(false)
@@ -6728,7 +6740,6 @@ const RoomFormModal = ({ mode = 'add', initialData, onSubmit, onClose, saving, o
     capacity:            String(initialData?.capacity ?? 1),
     floor:               String(initialData?.floor ?? 0),
     baseRent:            initialData?.baseRent != null ? String(initialData.baseRent) : '',
-    rentType:            initialData?.rentType ?? 'per_bed',
     gender:              initialData?.gender ?? 'male',
     hasAC:               initialData?.hasAC ?? false,
     hasAttachedBathroom: initialData?.hasAttachedBathroom ?? false,
@@ -6941,6 +6952,7 @@ const RoomFormModal = ({ mode = 'add', initialData, onSubmit, onClose, saving, o
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium pointer-events-none">₹</span>
                 <input type="number" min="0"
+                  data-testid="edit-base-rent-input"
                   className={`input pl-7 tabular-nums ${errors.baseRent ? 'border-red-400 focus:ring-red-200' : ''}`}
                   placeholder="8000"
                   value={form.baseRent}
@@ -6948,23 +6960,6 @@ const RoomFormModal = ({ mode = 'add', initialData, onSubmit, onClose, saving, o
                 />
               </div>
               {errors.baseRent && <p className="mt-1 text-[11px] text-red-500 font-medium">{errors.baseRent}</p>}
-            </div>
-            <div>
-              <label className="label">Rent Type</label>
-              <select
-                className={`input ${rentTypeLocked ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : ''}`}
-                value={form.rentType}
-                onChange={e => !rentTypeLocked && set('rentType', e.target.value)}
-                disabled={rentTypeLocked}
-              >
-                <option value="per_bed">Per Bed</option>
-                <option value="per_room">Per Room</option>
-              </select>
-              {rentTypeLocked && (
-                <p className="mt-1.5 text-[11px] text-amber-600 font-medium leading-relaxed">
-                  ⚠ Cannot change rent type while {occupiedBeds} tenant{occupiedBeds > 1 ? 's are' : ' is'} assigned. Vacate all tenants first.
-                </p>
-              )}
             </div>
             <div className="col-span-2">
               <label className="label">Category</label>
@@ -7049,9 +7044,19 @@ const RoomFormModal = ({ mode = 'add', initialData, onSubmit, onClose, saving, o
 //  FiltersBar
 // ══════════════════════════════════════════════════════════════════════════════
 const FILTER_DEFAULTS = {
-  search: '', status: 'all', occupancy: 'all',
-  type: 'all', gender: 'all', amenities: [], sortBy: 'default', floor: 'all',
-  overCapacity: false,
+  search:          '',
+  activeStatus:    'active',   // 'all' | 'active' | 'inactive'
+  occupancy:       'all',      // 'all' | 'vacant' | 'partial' | 'full'
+  hasBlockedBeds:   false,
+  hasReservedBeds:  false,
+  hasExtraBeds:     false,
+  type:            'all',      // 'all' | 'single' | 'double' | 'triple' | 'dormitory'
+  floor:           'all',
+  gender:          'all',
+  hasAC:           false,
+  hasAttachedBath: false,
+  sortBy:          'default',
+  showOnlyMatching: true,
 }
 
 const SELECT_CLS =
@@ -7059,168 +7064,473 @@ const SELECT_CLS =
   'focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 cursor-pointer ' +
   'transition-colors hover:border-slate-300'
 
-const FiltersBar = ({ filters, floors, onSearchChange, onFilterChange, onReset, hasActiveFilters, showFilters, onToggleFilters }) => {
-  const toggleAmenity = (key) => {
-    const cur = filters.amenities
-    onFilterChange('amenities', cur.includes(key) ? cur.filter(a => a !== key) : [...cur, key])
-  }
+// Shared mini-chip used inside FiltersBar for occupancy + bed-status rows
+const OccChip = ({ label, dot, active, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={[
+      'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold',
+      'transition-all duration-150 active:scale-[0.97]',
+      active
+        ? 'bg-primary-50 border-primary-300 text-primary-700 shadow-sm'
+        : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50',
+    ].join(' ')}
+  >
+    {dot && <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${dot}`} />}
+    {label}
+  </button>
+)
 
-  const nonSearchActive = filters.status !== 'all' || filters.occupancy !== 'all' ||
-    filters.type !== 'all' || filters.gender !== 'all' || filters.amenities.length > 0 ||
-    filters.sortBy !== 'default' || filters.floor !== 'all' || filters.overCapacity
+// 3-way toggle group (All / Active / Inactive)
+const StatusToggle = ({ value, onChange }) => (
+  <div className="flex rounded-xl border border-slate-200 bg-white overflow-hidden shrink-0">
+    {[['all','All'],['active','Active'],['inactive','Inactive']].map(([v, l], i, arr) => (
+      <button
+        key={v}
+        type="button"
+        onClick={() => onChange(v)}
+        className={[
+          'px-3 py-1.5 text-xs font-semibold transition-colors duration-150',
+          i < arr.length - 1 ? 'border-r border-slate-200' : '',
+          value === v
+            ? 'bg-primary-500 text-white'
+            : 'text-slate-500 hover:bg-slate-50',
+        ].join(' ')}
+      >{l}</button>
+    ))}
+  </div>
+)
+
+// Toggle switch
+const ToggleSwitch = ({ checked, onChange, label }) => (
+  <label className="flex items-center gap-2 cursor-pointer select-none">
+    <span className="text-xs font-medium text-slate-500 whitespace-nowrap">{label}</span>
+    <button
+      role="switch"
+      type="button"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400/60 ${
+        checked ? 'bg-primary-500' : 'bg-slate-200'
+      }`}
+    >
+      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
+        checked ? 'translate-x-[18px]' : 'translate-x-[2px]'
+      }`} />
+    </button>
+  </label>
+)
+
+const FiltersBar = ({ filters, floors, onSearchChange, onFilterChange, onReset, hasActiveFilters, showFilters, onToggleFilters }) => {
+  const [advOpen, setAdvOpen] = useState(false)
+
+  const hasBedFilter    = filters.occupancy !== 'all' || filters.hasBlockedBeds || filters.hasReservedBeds || filters.hasExtraBeds
+  const hasAdvFilter    = filters.gender !== 'all' || filters.hasAC || filters.hasAttachedBath || filters.hasExtraBeds
+  const nonSearchActive = filters.activeStatus !== 'all' || filters.occupancy !== 'all' ||
+    filters.type !== 'all' || filters.gender !== 'all' || filters.hasAC || filters.hasAttachedBath ||
+    filters.sortBy !== 'default' || filters.floor !== 'all' || filters.hasExtraBeds || filters.hasBlockedBeds || filters.hasReservedBeds
+
+  // Active filter count badge for mobile button
+  const activeCount = [
+    filters.activeStatus !== 'all',
+    filters.occupancy !== 'all',
+    filters.hasBlockedBeds,
+    filters.hasReservedBeds,
+    filters.hasExtraBeds,
+    filters.type !== 'all',
+    filters.floor !== 'all',
+    filters.gender !== 'all',
+    filters.hasAC,
+    filters.hasAttachedBath,
+    filters.sortBy !== 'default',
+  ].filter(Boolean).length
 
   return (
-    <div className="space-y-2">
-      {/* Search row — always visible */}
-      <div className="flex items-center gap-2">
+    <div>
+
+      {/* ── DESKTOP FILTER CARD ── */}
+      <div className="hidden sm:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+
+        {/* ROW 1: Search + controls */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
+          <div className="relative flex-1">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              className="input pl-8 pr-8 py-1.5 text-xs w-full"
+              placeholder="Search by room number, floor, type…"
+              data-testid="rooms-search"
+              value={filters.search}
+              onChange={e => onSearchChange(e.target.value)}
+            />
+            {filters.search && (
+              <button onClick={() => onSearchChange('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={12} />
+              </button>
+            )}
+          </div>
+
+          <StatusToggle value={filters.activeStatus} onChange={v => onFilterChange('activeStatus', v)} />
+
+          {floors.length > 0 && (
+            <select value={filters.floor} onChange={e => onFilterChange('floor', e.target.value)} className={SELECT_CLS}>
+              <option value="all">All Floors</option>
+              {floors.map(f => <option key={f} value={String(f)}>Floor {f}</option>)}
+            </select>
+          )}
+
+          <select value={filters.sortBy} onChange={e => onFilterChange('sortBy', e.target.value)} className={SELECT_CLS}>
+            <option value="default">Sort: Default</option>
+            <option value="rent_asc">Rent ↑</option>
+            <option value="rent_desc">Rent ↓</option>
+            <option value="occ_desc">Occupancy ↓</option>
+          </select>
+
+          <span className="h-5 w-px bg-slate-200 shrink-0" />
+
+          <button type="button" onClick={() => setAdvOpen(v => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors ${
+              advOpen || hasAdvFilter
+                ? 'border-primary-300 bg-primary-50 text-primary-600'
+                : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+            }`}>
+            <SlidersHorizontal size={12} />
+            Advanced
+            {hasAdvFilter && <span className="h-1.5 w-1.5 rounded-full bg-primary-500 shrink-0" />}
+            <ChevronDown size={11} className={`transition-transform duration-200 ${advOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {hasActiveFilters && (
+            <button type="button" onClick={onReset}
+              className="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-400 hover:bg-red-50 hover:border-red-200 hover:text-red-500 transition-colors">
+              <X size={11} />
+            </button>
+          )}
+        </div>
+
+        {/* ROW 2: Type */}
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-slate-100">
+          <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 shrink-0 w-10">Type</span>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {[
+              { val: 'all',       label: 'All'       },
+              { val: 'single',    label: 'Single'    },
+              { val: 'double',    label: 'Double'    },
+              { val: 'triple',    label: 'Triple'    },
+              { val: 'dormitory', label: 'Dormitory' },
+            ].map(({ val, label }) => (
+              <button key={val} type="button" onClick={() => onFilterChange('type', val)}
+                className={`rounded-xl border px-3 py-1 text-[11px] font-semibold transition-all duration-150 active:scale-[0.97] ${
+                  filters.type === val
+                    ? 'bg-primary-50 border-primary-300 text-primary-700 shadow-sm'
+                    : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ROW 3: Beds + toggle */}
+        <div className="flex items-center gap-3 px-4 py-2">
+          <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 shrink-0 w-10">Beds</span>
+          <div className="flex items-center gap-1.5 flex-wrap flex-1">
+            <OccChip label="All"     active={filters.occupancy === 'all'}     onClick={() => onFilterChange('occupancy', 'all')} />
+            <OccChip label="Vacant"  dot="bg-emerald-500" active={filters.occupancy === 'vacant'}  onClick={() => onFilterChange('occupancy', 'vacant')} />
+            <OccChip label="Partial" dot="bg-amber-400"   active={filters.occupancy === 'partial'} onClick={() => onFilterChange('occupancy', 'partial')} />
+            <OccChip label="Full"    dot="bg-red-500"     active={filters.occupancy === 'full'}    onClick={() => onFilterChange('occupancy', 'full')} />
+            <span className="h-4 w-px bg-slate-200 shrink-0" />
+            <SelectableChip label="Blocked"  icon={Ban}           active={filters.hasBlockedBeds}  onClick={() => onFilterChange('hasBlockedBeds',  !filters.hasBlockedBeds)}  color="red"  />
+            <SelectableChip label="Reserved" icon={CalendarClock} active={filters.hasReservedBeds} onClick={() => onFilterChange('hasReservedBeds', !filters.hasReservedBeds)} color="blue" />
+            <div className="ml-auto">
+              <ToggleSwitch
+                checked={filters.showOnlyMatching}
+                onChange={v => onFilterChange('showOnlyMatching', v)}
+                label={filters.showOnlyMatching ? 'Show only matching' : 'Show all (dim others)'}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ADVANCED PANEL */}
+        {advOpen && (
+          <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-3 space-y-2.5">
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 shrink-0 w-14">Gender</span>
+              <div className="flex items-center gap-1.5">
+                {[
+                  { val: 'all',    label: 'All'    },
+                  { val: 'male',   label: 'Male'   },
+                  { val: 'female', label: 'Female' },
+                  { val: 'unisex', label: 'Unisex' },
+                ].map(({ val, label }) => (
+                  <button key={val} type="button" onClick={() => onFilterChange('gender', val)}
+                    className={`rounded-xl border px-3 py-1 text-[11px] font-semibold transition-all duration-150 active:scale-[0.97] ${
+                      filters.gender === val
+                        ? 'bg-primary-50 border-primary-300 text-primary-700 shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+                    }`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 shrink-0 w-14">Room</span>
+              <div className="flex items-center gap-1.5">
+                <SelectableChip label="AC"            icon={Snowflake} active={filters.hasAC}            onClick={() => onFilterChange('hasAC',            !filters.hasAC)}            color="blue"    />
+                <SelectableChip label="Attached Bath" icon={Bath}      active={filters.hasAttachedBath}  onClick={() => onFilterChange('hasAttachedBath',  !filters.hasAttachedBath)}  color="blue"    />
+                <span className="h-4 w-px bg-slate-200 shrink-0" />
+                <SelectableChip label="Extra Beds"    icon={Sparkles}  active={filters.hasExtraBeds}     onClick={() => onFilterChange('hasExtraBeds',     !filters.hasExtraBeds)}     color="primary" />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── MOBILE: search + filter button ── */}
+      <div className="sm:hidden flex items-center gap-2">
         <div className="relative flex-1">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input
-            className="input pl-7 py-1.5 text-sm w-full"
-            placeholder="Search rooms…"
+            className="input pl-8 pr-8 py-1.5 text-sm w-full"
+            placeholder="Search by room number, floor, type…"
             value={filters.search}
             onChange={e => onSearchChange(e.target.value)}
           />
+          {filters.search && (
+            <button onClick={() => onSearchChange('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-slate-400 hover:text-slate-600 transition-colors">
+              <X size={13} />
+            </button>
+          )}
         </div>
-
-        {/* Mobile filter toggle */}
-        <button
-          onClick={onToggleFilters}
-          className={`sm:hidden relative flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors shrink-0 ${
-            showFilters ? 'border-primary-300 bg-primary-50 text-primary-600' : 'border-slate-200 bg-white text-slate-500'
-          }`}
-        >
+        <button type="button" onClick={onToggleFilters}
+          className={`relative inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors shrink-0 ${
+            showFilters || activeCount > 0
+              ? 'border-primary-300 bg-primary-50 text-primary-600'
+              : 'border-slate-200 bg-white text-slate-500'
+          }`}>
           <SlidersHorizontal size={13} />
           Filters
-          {nonSearchActive && (
-            <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-primary-500 ring-2 ring-white" />
+          {activeCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-primary-500 text-white text-[9px] font-bold flex items-center justify-center ring-2 ring-white">
+              {activeCount}
+            </span>
           )}
         </button>
       </div>
 
-      {/* Mobile filter modal (bottom sheet) */}
+      {/* ── MOBILE BOTTOM SHEET ── */}
       {showFilters && createPortal(
-        <div className="fixed inset-0 z-50 flex items-end" style={{ background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(2px)' }}
-          onClick={onToggleFilters}>
-          <div className="w-full bg-white rounded-t-2xl overflow-y-auto max-h-[85vh]"
-            onClick={e => e.stopPropagation()}>
-            {/* Handle + header */}
-            <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100">
+        <div
+          className="fixed inset-0 z-50 flex items-end"
+          style={{ background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(3px)' }}
+          onClick={onToggleFilters}
+        >
+          <div
+            className="w-full bg-white rounded-t-2xl overflow-y-auto max-h-[88vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-white flex items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100 z-10">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal size={15} className="text-primary-500" />
                 <span className="text-sm font-semibold text-slate-800">Filters</span>
+                {activeCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 text-[10px] font-bold">{activeCount} active</span>
+                )}
               </div>
               <button onClick={onToggleFilters} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 transition-colors">
                 <X size={16} />
               </button>
             </div>
 
-            <div className="p-4 space-y-4">
-              {/* Status + Occupancy */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Status</p>
-                  <div className="flex flex-col gap-1.5">
-                    {[['all','All'],['available','Available'],['maintenance','Maintenance'],['blocked','Blocked']].map(([v,l]) => (
-                      <button key={v} onClick={() => onFilterChange('status', v)}
-                        className={`rounded-xl px-3 py-2 text-xs font-medium text-left border transition-colors ${
-                          filters.status === v ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                        }`}>{l}</button>
-                    ))}
-                  </div>
+            <div className="p-4 space-y-5">
+
+              {/* Status */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Room Status</p>
+                <StatusToggle value={filters.activeStatus} onChange={v => onFilterChange('activeStatus', v)} />
+              </div>
+
+              {/* Bed Occupancy */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Bed Occupancy</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    { val: 'all',     label: 'All',     dot: null          },
+                    { val: 'vacant',  label: 'Vacant',  dot: 'bg-emerald-500' },
+                    { val: 'partial', label: 'Partial', dot: 'bg-amber-400'   },
+                    { val: 'full',    label: 'Full',    dot: 'bg-red-500'     },
+                  ].map(({ val, label, dot }) => (
+                    <button
+                      key={val}
+                      onClick={() => onFilterChange('occupancy', val)}
+                      className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold border transition-colors ${
+                        filters.occupancy === val
+                          ? 'bg-primary-50 border-primary-300 text-primary-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}
+                    >
+                      {dot && <span className={`h-2 w-2 rounded-full shrink-0 ${dot}`} />}
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Occupancy</p>
-                  <div className="flex flex-col gap-1.5">
-                    {[['all','All'],['vacant','Vacant'],['partial','Partial'],['full','Full']].map(([v,l]) => (
-                      <button key={v} onClick={() => onFilterChange('occupancy', v)}
-                        className={`rounded-xl px-3 py-2 text-xs font-medium text-left border transition-colors ${
-                          filters.occupancy === v ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                        }`}>{l}</button>
-                    ))}
-                  </div>
+              </div>
+
+              {/* Room Type */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Room Type</p>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[
+                    { val: 'all', label: 'All' },
+                    { val: 'single', label: 'Single' },
+                    { val: 'double', label: 'Double' },
+                    { val: 'triple', label: 'Triple' },
+                    { val: 'dormitory', label: 'Dorm' },
+                  ].map(({ val, label }) => (
+                    <button
+                      key={val}
+                      onClick={() => onFilterChange('type', val)}
+                      className={`rounded-xl py-2 text-[10px] font-semibold text-center border transition-colors ${
+                        filters.type === val
+                          ? 'bg-primary-50 border-primary-300 text-primary-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}
+                    >{label}</button>
+                  ))}
                 </div>
               </div>
 
               {/* Floor */}
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Floor</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {[{ val: 'all', label: 'All' }, ...floors.map(f => ({ val: String(f), label: `Floor ${f}` }))].map(({ val, label }) => (
-                    <button key={val} onClick={() => onFilterChange('floor', val)}
-                      className={`rounded-xl px-3 py-2 text-xs font-medium border transition-colors ${
-                        filters.floor === val ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                      }`}>{label}</button>
-                  ))}
+              {floors.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Floor</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[{ val: 'all', label: 'All' }, ...floors.map(f => ({ val: String(f), label: `Floor ${f}` }))].map(({ val, label }) => (
+                      <button
+                        key={val}
+                        onClick={() => onFilterChange('floor', val)}
+                        className={`rounded-xl px-3 py-2 text-xs font-semibold border transition-colors ${
+                          filters.floor === val
+                            ? 'bg-primary-50 border-primary-300 text-primary-700'
+                            : 'bg-slate-50 border-slate-200 text-slate-500'
+                        }`}
+                      >{label}</button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-
-              {/* Type */}
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Room Type</p>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {[{val:'all',label:'All'},{val:'single',label:'Single'},{val:'double',label:'Double'},{val:'triple',label:'Triple'},{val:'dormitory',label:'Dorm'}].map(({ val, label }) => (
-                    <button key={val} onClick={() => onFilterChange('type', val)}
-                      className={`rounded-xl py-2 text-[10px] font-medium text-center border transition-colors ${
-                        filters.type === val ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                      }`}>{label}</button>
-                  ))}
-                </div>
-              </div>
+              )}
 
               {/* Gender */}
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Gender</p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Gender</p>
                 <div className="grid grid-cols-4 gap-1.5">
-                  {[{val:'all',label:'All'},{val:'male',label:'Male'},{val:'female',label:'Female'},{val:'unisex',label:'Unisex'}].map(({ val, label }) => (
-                    <button key={val} onClick={() => onFilterChange('gender', val)}
-                      className={`rounded-xl py-2 text-xs font-medium text-center border transition-colors ${
-                        filters.gender === val ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                      }`}>{label}</button>
+                  {[
+                    { val: 'all', label: 'All' },
+                    { val: 'male', label: 'Male' },
+                    { val: 'female', label: 'Female' },
+                    { val: 'unisex', label: 'Unisex' },
+                  ].map(({ val, label }) => (
+                    <button
+                      key={val}
+                      onClick={() => onFilterChange('gender', val)}
+                      className={`rounded-xl py-2 text-xs font-semibold text-center border transition-colors ${
+                        filters.gender === val
+                          ? 'bg-primary-50 border-primary-300 text-primary-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}
+                    >{label}</button>
                   ))}
                 </div>
               </div>
 
-              {/* Amenities + Sort */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Amenities</p>
-                  <div className="flex flex-col gap-1.5">
-                    {[{key:'ac',label:'AC',icon:Snowflake},{key:'bath',label:'Attached Bath',icon:Bath}].map(({ key, label, icon: Icon }) => (
-                      <button key={key} onClick={() => toggleAmenity(key)}
-                        className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium border transition-colors ${
-                          filters.amenities.includes(key) ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                        }`}><Icon size={12} />{label}</button>
-                    ))}
-                    <button onClick={() => onFilterChange('overCapacity', !filters.overCapacity)}
-                      className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium border transition-colors ${
-                        filters.overCapacity ? 'bg-red-50 border-red-300 text-red-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                      }`}><AlertTriangle size={12} />Over Capacity</button>
-                  </div>
+              {/* Amenities + Special */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Amenities & Flags</p>
+                <div className="flex flex-col gap-2">
+                  {[
+                    { key: 'hasAC',          icon: Snowflake,    label: 'Air Conditioning', color: 'blue' },
+                    { key: 'hasAttachedBath', icon: Bath,        label: 'Attached Bathroom', color: 'blue' },
+                    { key: 'hasBlockedBeds',  icon: Ban,         label: 'Has Blocked Beds',   color: 'red'     },
+                    { key: 'hasReservedBeds', icon: CalendarClock, label: 'Has Reserved Beds',  color: 'blue'    },
+                    { key: 'hasExtraBeds',    icon: Sparkles,      label: 'Extra Beds',         color: 'primary' },
+                  ].map(({ key, icon: Icon, label, color }) => {
+                    const active = !!filters[key]
+                    const cls = active
+                      ? color === 'red'     ? 'bg-red-50 border-red-300 text-red-700'
+                      : color === 'primary' ? 'bg-primary-50 border-primary-300 text-primary-700'
+                      :                       'bg-blue-50 border-blue-300 text-blue-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-500'
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => onFilterChange(key, !filters[key])}
+                        className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold border transition-colors ${cls}`}
+                      >
+                        <Icon size={13} className="shrink-0" />
+                        {label}
+                      </button>
+                    )
+                  })}
                 </div>
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-2">Sort By</p>
-                  <div className="flex flex-col gap-1.5">
-                    {[['default','Default'],['rent_asc','Rent ↑'],['rent_desc','Rent ↓'],['occ_desc','Occupancy ↓']].map(([v,l]) => (
-                      <button key={v} onClick={() => onFilterChange('sortBy', v)}
-                        className={`rounded-xl px-3 py-2 text-xs font-medium text-left border transition-colors ${
-                          filters.sortBy === v ? 'bg-primary-50 border-primary-300 text-primary-600' : 'bg-slate-50 border-slate-200 text-slate-500'
-                        }`}>{l}</button>
-                    ))}
-                  </div>
+              </div>
+
+              {/* Sort */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Sort By</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    ['default',  'Default'],
+                    ['rent_asc', 'Rent ↑'],
+                    ['rent_desc','Rent ↓'],
+                    ['occ_desc', 'Occupancy ↓'],
+                  ].map(([v, l]) => (
+                    <button
+                      key={v}
+                      onClick={() => onFilterChange('sortBy', v)}
+                      className={`rounded-xl px-3 py-2.5 text-xs font-semibold text-center border transition-colors ${
+                        filters.sortBy === v
+                          ? 'bg-primary-50 border-primary-300 text-primary-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}
+                    >{l}</button>
+                  ))}
                 </div>
+              </div>
+
+              {/* Show only matching toggle */}
+              <div className="flex items-center justify-between rounded-xl bg-slate-50 border border-slate-200 px-4 py-3">
+                <div>
+                  <p className="text-xs font-semibold text-slate-700">Show only matching rooms</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    {filters.showOnlyMatching ? 'Non-matching rooms are hidden' : 'All rooms shown; non-matching beds are faded'}
+                  </p>
+                </div>
+                <ToggleSwitch
+                  checked={filters.showOnlyMatching}
+                  onChange={v => onFilterChange('showOnlyMatching', v)}
+                  label=""
+                />
               </div>
 
               {/* Actions */}
               <div className="flex gap-2 pt-1 pb-2">
                 {hasActiveFilters && (
-                  <button onClick={() => { onReset(); onToggleFilters() }}
-                    className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-500 hover:bg-slate-50 transition-colors">
-                    Reset
+                  <button
+                    onClick={() => { onReset(); onToggleFilters() }}
+                    className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-50 transition-colors"
+                  >
+                    Reset All
                   </button>
                 )}
-                <button onClick={onToggleFilters}
-                  className="flex-1 rounded-xl bg-primary-500 hover:bg-primary-600 py-2.5 text-sm font-semibold text-white transition-colors">
+                <button
+                  onClick={onToggleFilters}
+                  className="flex-1 rounded-xl bg-primary-500 hover:bg-primary-600 py-2.5 text-sm font-semibold text-white transition-colors"
+                >
                   Apply
                 </button>
               </div>
@@ -7229,66 +7539,6 @@ const FiltersBar = ({ filters, floors, onSearchChange, onFilterChange, onReset, 
         </div>,
         document.body
       )}
-
-      {/* Desktop filter rows — always visible on sm+ */}
-      <div className="hidden sm:block bg-white border border-slate-200 rounded-xl p-3 space-y-2.5">
-        {/* Row 1: dropdowns + reset */}
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={filters.status} onChange={e => onFilterChange('status', e.target.value)} className={SELECT_CLS}>
-            <option value="all">All Status</option>
-            <option value="available">Available</option>
-            <option value="maintenance">Maintenance</option>
-            <option value="blocked">Blocked</option>
-          </select>
-          <select value={filters.occupancy} onChange={e => onFilterChange('occupancy', e.target.value)} className={SELECT_CLS}>
-            <option value="all">All Occupancy</option>
-            <option value="vacant">Vacant</option>
-            <option value="partial">Partially Occupied</option>
-            <option value="full">Fully Occupied</option>
-          </select>
-          <select value={filters.floor} onChange={e => onFilterChange('floor', e.target.value)} className={SELECT_CLS}>
-            <option value="all">All Floors</option>
-            {floors.map(f => (
-              <option key={f} value={String(f)}>Floor {f}</option>
-            ))}
-          </select>
-          <select value={filters.sortBy} onChange={e => onFilterChange('sortBy', e.target.value)} className={SELECT_CLS}>
-            <option value="default">Sort: Default</option>
-            <option value="rent_asc">Rent: Low → High</option>
-            <option value="rent_desc">Rent: High → Low</option>
-            <option value="occ_desc">Occupancy: High → Low</option>
-          </select>
-          {hasActiveFilters && (
-            <button onClick={onReset}
-              className="ml-auto flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-red-50 hover:border-red-200 hover:text-red-500 transition-colors">
-              <X size={12} /> Reset filters
-            </button>
-          )}
-        </div>
-        {/* Row 2: Type + Gender + Amenities chips */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-slate-400 font-medium shrink-0">Type:</span>
-          {[{val:'all',label:'All'},{val:'single',label:'Single'},{val:'double',label:'Double'},{val:'triple',label:'Triple'},{val:'dormitory',label:'Dormitory'}].map(({ val, label }) => (
-            <SelectableChip key={val} label={label} active={filters.type === val} onClick={() => onFilterChange('type', val)} />
-          ))}
-          <span className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
-          <span className="text-xs text-slate-400 font-medium shrink-0">Gender:</span>
-          {[{val:'all',label:'All'},{val:'male',label:'Male'},{val:'female',label:'Female'},{val:'unisex',label:'Unisex'}].map(({ val, label }) => (
-            <SelectableChip key={val} label={label} active={filters.gender === val} onClick={() => onFilterChange('gender', val)} />
-          ))}
-          <span className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
-          <SelectableChip label="AC" icon={Snowflake} active={filters.amenities.includes('ac')} onClick={() => toggleAmenity('ac')} />
-          <SelectableChip label="Attached Bath" icon={Bath} active={filters.amenities.includes('bath')} onClick={() => toggleAmenity('bath')} />
-          <span className="h-4 w-px bg-slate-200 mx-1 shrink-0" />
-          <SelectableChip
-            label="Over Capacity"
-            icon={AlertTriangle}
-            active={filters.overCapacity}
-            onClick={() => onFilterChange('overCapacity', !filters.overCapacity)}
-            color="red"
-          />
-        </div>
-      </div>
     </div>
   )
 }
@@ -7296,8 +7546,90 @@ const FiltersBar = ({ filters, floors, onSearchChange, onFilterChange, onReset, 
 // ══════════════════════════════════════════════════════════════════════════════
 //  Main Page
 // ══════════════════════════════════════════════════════════════════════════════
+// ── No Property Empty State ───────────────────────────────────────────────────
+const NoPropertyState = () => {
+  const navigate = useNavigate()
+
+  const steps = [
+    { num: '1', label: 'Add a Property',    desc: 'Create your PG / Hostel in the Properties page',  to: '/properties' },
+    { num: '2', label: 'Add Rooms',         desc: 'Define rooms with capacity and amenities' },
+    { num: '3', label: 'Add Beds',          desc: 'Set up individual beds inside each room'  },
+    { num: '4', label: 'Assign Tenants',    desc: 'Assign tenants and start collecting rent' },
+  ]
+
+  return (
+    <div className="flex items-center justify-center px-4 py-12 min-h-[60vh]">
+      <div className="w-full max-w-xl">
+
+        {/* Hero */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center h-20 w-20 rounded-3xl mb-5 mx-auto"
+            style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
+            <BedDouble size={36} style={{ color: '#60C3AD' }} />
+          </div>
+          <h2 className="text-xl font-bold text-slate-800">No property selected</h2>
+          <p className="text-sm text-slate-400 mt-2 max-w-xs mx-auto leading-relaxed">
+            Select a property from the sidebar to manage its rooms and beds.
+          </p>
+        </div>
+
+        {/* CTA */}
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-5">
+          <div className="px-5 py-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">No properties yet?</p>
+              <p className="text-xs text-slate-400 mt-0.5">Create one first, then add rooms and beds</p>
+            </div>
+            <button
+              onClick={() => navigate('/properties')}
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+              style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}
+            >
+              <Building2 size={14} /> Add Property
+            </button>
+          </div>
+          <div className="h-px bg-slate-100" />
+          <div className="px-5 py-3 bg-slate-50/60 flex items-center gap-2 text-xs text-slate-400">
+            <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm font-medium text-slate-600">
+              <Home size={10} className="text-emerald-500" />
+              Your property
+              <ChevronRight size={10} className="text-slate-300" />
+            </div>
+            <span>shows in the sidebar panel on the left</span>
+          </div>
+        </div>
+
+        {/* Steps */}
+        <div className="rounded-2xl border border-slate-100 bg-white overflow-hidden divide-y divide-slate-100">
+          <p className="px-5 py-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+            How it works
+          </p>
+          {steps.map(({ num, label, desc, to }) => (
+            <div key={num}
+              className={`flex items-center gap-4 px-5 py-3.5 ${to ? 'cursor-pointer hover:bg-slate-50 transition-colors group' : ''}`}
+              onClick={to ? () => navigate(to) : undefined}
+            >
+              <div className="shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}>
+                {num}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-700">{label}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{desc}</p>
+              </div>
+              {to && <ChevronRight size={14} className="text-slate-300 shrink-0 group-hover:text-slate-500 transition-colors" />}
+            </div>
+          ))}
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 const RoomsBeds = () => {
-  const { selectedProperty } = useProperty()
+  const { selectedProperty, refreshProperties } = useProperty()
   const propertyId = selectedProperty?._id ?? ''
   const toast = useToast()
 
@@ -7325,6 +7657,25 @@ const RoomsBeds = () => {
 
   const rooms = roomData?.data ?? []
 
+  // Synchronously filter bedStats to only ACTIVE rooms in the current fetch result.
+  // Uses the same isActive predicate as activeRoomsCount so both rooms and beds
+  // counts are always in sync. getRooms backend returns ALL rooms (no isActive
+  // filter), so we must filter client-side here to exclude inactive rooms.
+  // Deriving this from `rooms` (not via useEffect) means the exclusion is instant
+  // — no render-cycle delay when a room is deactivated or the property switches.
+  const activeRoomIds = useMemo(
+    () => new Set(
+      rooms
+        .filter(r => r.isActive !== false && r.status !== 'maintenance' && r.status !== 'blocked')
+        .map(r => r._id)
+    ),
+    [rooms]
+  )
+  const validBedStats = useMemo(
+    () => Object.fromEntries(Object.entries(bedStats).filter(([id]) => activeRoomIds.has(id))),
+    [bedStats, activeRoomIds]
+  )
+
   const handleSearchChange = useCallback((val) => {
     setFilters(f => ({ ...f, search: val }))
     clearTimeout(searchDebounceRef.current)
@@ -7343,36 +7694,60 @@ const RoomsBeds = () => {
 
   const hasActiveFilters = useMemo(() =>
     filters.search !== '' ||
-    filters.status !== 'all' ||
+    filters.activeStatus !== 'active' ||
     filters.occupancy !== 'all' ||
     filters.type !== 'all' ||
     filters.gender !== 'all' ||
-    filters.amenities.length > 0 ||
+    filters.hasAC ||
+    filters.hasAttachedBath ||
     filters.sortBy !== 'default' ||
     filters.floor !== 'all' ||
-    filters.overCapacity
+    filters.hasExtraBeds ||
+    filters.hasBlockedBeds
   , [filters])
+
+  // Helper: does a room pass the bed-level filters?
+  const roomMatchesBedFilters = useCallback((r) => {
+    const s = bedStats[r._id]
+    if (filters.occupancy !== 'all') {
+      if (!s || s.total === 0) { if (filters.occupancy !== 'vacant') return false }
+      else {
+        // Use normal-bed counts only — extra beds don't affect the room's occupancy
+        // classification. Matches the same logic used by the room card status badge.
+        const normalTotal  = s.total   - (s.extraTotal   ?? 0)
+        const normalVacant = s.vacant  - (s.extraVacant  ?? 0)
+        if (filters.occupancy === 'vacant'  && !(normalVacant === normalTotal)) return false
+        if (filters.occupancy === 'partial' && !(normalVacant > 0 && normalVacant < normalTotal)) return false
+        if (filters.occupancy === 'full'    && !(normalVacant === 0)) return false
+      }
+    }
+    if (filters.hasExtraBeds) {
+      if (!s || (s.extraTotal ?? 0) === 0) return false
+    }
+    if (filters.hasBlockedBeds) {
+      if (!s || s.blocked === 0) return false
+    }
+    if (filters.hasReservedBeds) {
+      // Normal reserved only — extra reserved are edge-case, don't count toward this filter
+      if (!s || (s.reserved - (s.extraReserved ?? 0)) === 0) return false
+    }
+    return true
+  }, [bedStats, filters.occupancy, filters.hasExtraBeds, filters.hasBlockedBeds, filters.hasReservedBeds])
 
   const filteredRooms = useMemo(() => {
     let list = [...rooms]
 
-    // Search (debounced)
-    const q = debouncedSearch.trim().toLowerCase()
-    if (q) {
-      list = list.filter(r =>
-        r.roomNumber.toLowerCase().includes(q) ||
-        `floor ${r.floor}`.includes(q)
-      )
+    // ── Stage 1: Room-level filters ──────────────────────────────────────────
+    // Active/Inactive status
+    if (filters.activeStatus === 'active') {
+      list = list.filter(r => r.isActive !== false && r.status !== 'maintenance' && r.status !== 'blocked')
+    } else if (filters.activeStatus === 'inactive') {
+      list = list.filter(r => r.isActive === false || r.status === 'maintenance' || r.status === 'blocked')
     }
 
     // Floor
     if (filters.floor !== 'all') {
       list = list.filter(r => String(r.floor ?? 0) === filters.floor)
-    }
-
-    // Status
-    if (filters.status !== 'all') {
-      list = list.filter(r => r.status === filters.status)
     }
 
     // Type
@@ -7386,54 +7761,92 @@ const RoomsBeds = () => {
     }
 
     // Amenities
-    if (filters.amenities.includes('ac'))   list = list.filter(r => r.hasAC)
-    if (filters.amenities.includes('bath')) list = list.filter(r => r.hasAttachedBathroom)
+    if (filters.hasAC)           list = list.filter(r => r.hasAC)
+    if (filters.hasAttachedBath) list = list.filter(r => r.hasAttachedBathroom)
 
-    // Occupancy (uses bedStats — may be empty on first render, filter gracefully)
-    if (filters.occupancy !== 'all') {
-      list = list.filter(r => {
-        const s = bedStats[r._id]
-        if (!s || s.total === 0) return filters.occupancy === 'vacant'
-        const active = s.occupied + s.reserved
-        if (filters.occupancy === 'vacant')  return active === 0
-        if (filters.occupancy === 'partial') return active > 0 && s.occupied < s.total
-        if (filters.occupancy === 'full')    return s.occupied === s.total
-        return true
-      })
+    // ── Stage 2: Bed-level filters (respects showOnlyMatching toggle) ────────
+    const hasBedFilter = filters.occupancy !== 'all' || filters.hasExtraBeds || filters.hasBlockedBeds || filters.hasReservedBeds
+    if (hasBedFilter) {
+      if (filters.showOnlyMatching) {
+        // Hide rooms that don't match bed filters
+        list = list.filter(r => roomMatchesBedFilters(r))
+      }
+      // When showOnlyMatching=false, keep all rooms — beds get dimmed via activeBedFilter
     }
 
-    // Over Capacity
-    if (filters.overCapacity) {
-      list = list.filter(r => {
-        const s = bedStats[r._id]
-        return s && s.total > r.capacity
-      })
+    // ── Stage 3: Search ──────────────────────────────────────────────────────
+    const q = debouncedSearch.trim().toLowerCase()
+    if (q) {
+      list = list.filter(r =>
+        r.roomNumber.toLowerCase().includes(q) ||
+        `floor ${r.floor}`.includes(q) ||
+        (r.type ?? '').toLowerCase().includes(q)
+      )
     }
 
-    // Sort
+    // ── Sort ─────────────────────────────────────────────────────────────────
     if (filters.sortBy === 'rent_asc')  list.sort((a, b) => a.baseRent - b.baseRent)
     if (filters.sortBy === 'rent_desc') list.sort((a, b) => b.baseRent - a.baseRent)
     if (filters.sortBy === 'occ_desc') {
       list.sort((a, b) => {
-        const aR = bedStats[a._id]?.total ? bedStats[a._id].occupied / bedStats[a._id].total : 0
-        const bR = bedStats[b._id]?.total ? bedStats[b._id].occupied / bedStats[b._id].total : 0
+        const sa = bedStats[a._id], sb = bedStats[b._id]
+        const aNormal = (sa?.total ?? 0) - (sa?.extraTotal ?? 0)
+        const bNormal = (sb?.total ?? 0) - (sb?.extraTotal ?? 0)
+        const aVacant = (sa?.vacant ?? 0) - (sa?.extraVacant ?? 0)
+        const bVacant = (sb?.vacant ?? 0) - (sb?.extraVacant ?? 0)
+        const aR = aNormal > 0 ? (aNormal - aVacant) / aNormal : 0
+        const bR = bNormal > 0 ? (bNormal - bVacant) / bNormal : 0
         return bR - aR
       })
     }
 
     return list
-  }, [rooms, debouncedSearch, filters, bedStats])
+  }, [rooms, debouncedSearch, filters, bedStats, roomMatchesBedFilters])
+
+  // ── activeBedFilter: drives per-bed dimming when showOnlyMatching=false ────
+  const activeBedFilter = useMemo(() => {
+    const hasBedFilter = filters.occupancy !== 'all' || filters.hasExtraBeds || filters.hasBlockedBeds || filters.hasReservedBeds
+    if (!hasBedFilter || filters.showOnlyMatching) return null
+
+    let highlightStatuses = []
+    if (filters.occupancy === 'vacant')        highlightStatuses = ['vacant']
+    else if (filters.occupancy === 'full')     highlightStatuses = ['occupied']
+    else if (filters.occupancy === 'partial')  highlightStatuses = ['vacant', 'occupied']
+    if (filters.hasBlockedBeds)                highlightStatuses = [...new Set([...highlightStatuses, 'blocked'])]
+    if (filters.hasReservedBeds)               highlightStatuses = [...new Set([...highlightStatuses, 'reserved'])]
+
+    if (highlightStatuses.length === 0) return null
+
+    return { highlightStatuses }
+  }, [filters.occupancy, filters.hasExtraBeds, filters.hasBlockedBeds, filters.hasReservedBeds, filters.showOnlyMatching])
+
+  // Active rooms only (same predicate used by filteredRooms activeStatus='active')
+  const activeRoomsCount = useMemo(
+    () => rooms.filter(r => r.isActive !== false && r.status !== 'maintenance' && r.status !== 'blocked').length,
+    [rooms]
+  )
 
   const summaryStats = useMemo(() => {
-    const all = Object.values(bedStats)
+    const all = Object.values(validBedStats)
+    // Beds / Vacant / Reserved count normal beds only (declared capacity).
+    // Occupied counts all beds including extra — a tenant on X1 is a real tenant.
+    // This means Occupied can exceed Total Beds when extra beds are in use,
+    // which is the honest signal that the property is over declared capacity.
     return {
-      rooms:    rooms.length,
-      beds:     all.reduce((s, b) => s + b.total, 0),
-      occupied: all.reduce((s, b) => s + b.occupied, 0),
-      vacant:   all.reduce((s, b) => s + b.vacant, 0),
-      reserved: all.reduce((s, b) => s + b.reserved, 0),
+      rooms:      activeRoomsCount,
+      beds:       all.reduce((s, b) => s + b.total    - (b.extraTotal    ?? 0), 0),
+      // Occupied = ALL tenants including extra — honest count of people in the property.
+      // The % badge uses normal-only occupancy so it matches the room-card badge.
+      occupied:   all.reduce((s, b) => s + b.occupied, 0),
+      vacant:     all.reduce((s, b) => s + b.vacant   - (b.extraVacant   ?? 0), 0),
+      reserved:   all.reduce((s, b) => s + b.reserved - (b.extraReserved ?? 0), 0),
+      extraTotal:    all.reduce((s, b) => s + (b.extraTotal    ?? 0), 0),
+      extraVacant:   all.reduce((s, b) => s + (b.extraVacant   ?? 0), 0),
+      extraReserved: all.reduce((s, b) => s + (b.extraReserved ?? 0), 0),
+      // extraOccupied = extraActive (occupied+reserved) minus reserved = occupied-only extra
+      extraOccupied: all.reduce((s, b) => s + ((b.extraActive ?? 0) - (b.extraReserved ?? 0)), 0),
     }
-  }, [bedStats, rooms.length])
+  }, [validBedStats, activeRoomsCount])
 
   const handleStatsReady = useCallback((roomId, stats) => {
     setBedStats(prev => {
@@ -7468,9 +7881,8 @@ const RoomsBeds = () => {
   }
 
   const handleBedClick = (bed, room, refetch, action = null) => {
-    // "View" button OR plain card click on an occupied bed → open tenant profile directly
-    const isViewIntent = action === 'View' || (action === null && bed.status === 'occupied')
-    if (isViewIntent && bed.tenant?._id) {
+    // "View" button → open tenant profile directly
+    if (action === 'View' && bed.tenant?._id) {
       handleViewTenant(bed.tenant._id)
       return
     }
@@ -7485,6 +7897,7 @@ const RoomsBeds = () => {
       await createRoom(propertyId, form)
       setShowAddRoom(false)
       refetchRooms()
+      refreshProperties()
       toast(`Room ${form.roomNumber} added`, 'success')
     } catch (err) {
       toast(err.response?.data?.message || 'Error adding room', 'error')
@@ -7495,7 +7908,6 @@ const RoomsBeds = () => {
 
   // ── 3-dot menu handlers ─────────────────────────────────────────────────
   const handleEditRoom = (room) => {
-    console.log('[RoomMenu] Edit Room:', room.roomNumber, room._id)
     setEditRoom(room)
   }
 
@@ -7508,7 +7920,8 @@ const RoomsBeds = () => {
       setBedRefreshKeys(prev => ({ ...prev, [editRoom._id]: (prev[editRoom._id] ?? 0) + 1 }))
       setEditRoom(null)
       refetchRooms()
-      toast(`Room ${formData.roomNumber} updated`, 'success')
+      refreshProperties()
+      toast(`Room ${editRoom.roomNumber} updated`, 'success')
     } catch (err) {
       const errData = err.response?.data
       if (errData?.code === 'ROOM_TYPE_CHANGE_BLOCKED') {
@@ -7534,7 +7947,6 @@ const RoomsBeds = () => {
   const [confirmDeactivate, setConfirmDeactivate] = useState(null)
 
   const handleToggleActive = (room) => {
-    console.log('[RoomMenu] Deactivate Room:', room.roomNumber, room._id)
     setConfirmDeactivate(room)
   }
 
@@ -7544,6 +7956,7 @@ const RoomsBeds = () => {
       await updateRoom(propertyId, confirmDeactivate._id, { isActive: false })
       setConfirmDeactivate(null)
       refetchRooms()
+      refreshProperties()
       toast(`Room ${confirmDeactivate.roomNumber} deactivated`, 'info')
     } catch (err) {
       toast(err.response?.data?.message || 'Failed to deactivate room', 'error')
@@ -7563,6 +7976,7 @@ const RoomsBeds = () => {
       await updateRoom(propertyId, confirmReactivate._id, { isActive: true })
       setConfirmReactivate(null)
       refetchRooms()
+      refreshProperties()
       toast(`Room ${confirmReactivate.roomNumber} reactivated`, 'success')
     } catch (err) {
       toast(err.response?.data?.message || 'Failed to reactivate room', 'error')
@@ -7582,6 +7996,7 @@ const RoomsBeds = () => {
       setConfirmDelete(null)
       setDeleteConfirmText('')
       refetchRooms()
+      refreshProperties()
       toast(`Room ${confirmDelete.roomNumber} permanently deleted`, 'info')
     } catch (err) {
       toast(err.response?.data?.message || 'Failed to delete room', 'error')
@@ -7598,7 +8013,7 @@ const RoomsBeds = () => {
             <div>
               <h2 className="font-semibold text-slate-800">{selectedProperty.name}</h2>
               <p className="text-sm text-slate-400">
-                {filteredRooms.length} room{rooms.length !== 1 ? 's' : ''}
+                {filteredRooms.length} room{filteredRooms.length !== 1 ? 's' : ''}
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -7614,14 +8029,14 @@ const RoomsBeds = () => {
                   </span>
                 ))}
               </div>
-              <button className="btn-primary" onClick={() => setShowAddRoom(true)}>
+              <button className="btn-primary" data-testid="add-room-btn" onClick={() => setShowAddRoom(true)}>
                 <Plus size={16} /> Add Room
               </button>
             </div>
           </div>
 
-          {/* Summary KPIs */}
-          {rooms.length > 0 && Object.keys(bedStats).length > 0 && (
+          {/* Summary KPIs — only show when ALL active rooms have reported their bed stats */}
+          {activeRoomsCount > 0 && Object.keys(validBedStats).length >= activeRoomsCount && (
             <div className="hidden sm:block">
               <SummaryCards stats={summaryStats} />
             </div>
@@ -7645,7 +8060,7 @@ const RoomsBeds = () => {
 
       {/* Content */}
       {!propertyId ? (
-        <div className="card"><EmptyState message="No property selected. Choose one from the sidebar." /></div>
+        <NoPropertyState />
       ) : roomLoading ? (
         <Spinner />
       ) : rooms.length === 0 ? (
@@ -7658,7 +8073,7 @@ const RoomsBeds = () => {
               <h3 className="text-base font-semibold text-slate-800 mb-1">No rooms added yet</h3>
               <p className="text-sm text-slate-500">Add your first room to start managing beds and tenants.</p>
             </div>
-            <button className="btn-primary" onClick={() => setShowAddRoom(true)}>
+            <button className="btn-primary" data-testid="add-room-empty-btn" onClick={() => setShowAddRoom(true)}>
               <Plus size={16} /> Add Your First Room
             </button>
           </div>
@@ -7687,6 +8102,8 @@ const RoomsBeds = () => {
               onRoomClick={room => setSelectedRoom(room)}
               loadingBedId={loadingBedId}
               refreshKey={bedRefreshKeys[r._id] ?? 0}
+              bedFilter={activeBedFilter}
+              roomMatches={roomMatchesBedFilters(r)}
             />
           ))}
         </div>
@@ -7724,6 +8141,7 @@ const RoomsBeds = () => {
           onClose={() => setModalBed(null)}
           onSuccess={async (opts) => {
             const bedId   = modalBed.bed._id
+            const roomId  = modalBed.room._id
             const refetch = modalBed.refetch
             setModalBed(null)
             setLoadingBedId(bedId)
@@ -7732,8 +8150,11 @@ const RoomsBeds = () => {
             } finally {
               setLoadingBedId(null)
             }
+            refreshProperties()
+            // Always bump the current room's refresh key so the card re-fetches
+            setBedRefreshKeys(prev => ({ ...prev, [roomId]: (prev[roomId] ?? 0) + 1 }))
             // If tenant moved to a different room, also refresh that room's card
-            if (opts?.targetRoomId && opts.targetRoomId !== modalBed.room._id) {
+            if (opts?.targetRoomId && opts.targetRoomId !== roomId) {
               setBedRefreshKeys(prev => ({ ...prev, [opts.targetRoomId]: (prev[opts.targetRoomId] ?? 0) + 1 }))
             }
           }}
@@ -7750,21 +8171,29 @@ const RoomsBeds = () => {
           vacantNormalCount={extraBedRoom.vacantNormalCount ?? 0}
           onClose={() => setExtraBedRoom(null)}
           onSuccess={() => {
+            const roomId = extraBedRoom.room._id
             setExtraBedRoom(null)
-            refetchRooms()
+            setBedRefreshKeys(prev => ({ ...prev, [roomId]: (prev[roomId] ?? 0) + 1 }))
+            refreshProperties()
           }}
         />
       )}
 
       {/* Deactivate Confirmation Modal */}
       {confirmDeactivate && (() => {
-        const s           = bedStats[confirmDeactivate._id] ?? {}
-        const occCount    = s.occupied    ?? 0
-        const extraCount  = s.extraActive ?? 0
-        const blocked     = occCount > 0 || extraCount > 0
-        const blockMsg    = occCount > 0
-          ? 'Cannot deactivate room with active tenants. Please vacate all tenants first.'
-          : 'Remove or vacate extra beds before proceeding.'
+        const s            = bedStats[confirmDeactivate._id] ?? {}
+        const occCount     = s.occupied   ?? 0
+        const resCount     = s.reserved   ?? 0
+        const blockedCount = s.blocked    ?? 0
+        const extraCount   = s.extraTotal ?? 0
+        const blocked      = occCount > 0 || resCount > 0 || blockedCount > 0 || extraCount > 0
+        const blockMsg     = occCount > 0
+          ? `${occCount} bed${occCount > 1 ? 's' : ''} occupied. Please vacate all tenants first.`
+          : resCount > 0
+          ? `${resCount} bed${resCount > 1 ? 's' : ''} reserved. Cancel all reservations first.`
+          : blockedCount > 0
+          ? `${blockedCount} bed${blockedCount > 1 ? 's' : ''} blocked. Unblock all beds first.`
+          : `${extraCount} extra bed${extraCount > 1 ? 's' : ''} exist. Remove all extra beds first.`
         return (
         <Modal title="Deactivate Room" onClose={() => setConfirmDeactivate(null)} size="sm">
           <div className="space-y-4">
@@ -7786,6 +8215,7 @@ const RoomsBeds = () => {
               <button className="btn-secondary flex-1" onClick={() => setConfirmDeactivate(null)}>Cancel</button>
               {!blocked && (
                 <button className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm"
+                  data-testid="deactivate-confirm-btn"
                   onClick={confirmDeactivateAction}>
                   <Power size={14} /> Deactivate
                 </button>
@@ -7812,6 +8242,7 @@ const RoomsBeds = () => {
             <div className="flex gap-2">
               <button className="btn-secondary flex-1" onClick={() => setConfirmReactivate(null)}>Cancel</button>
               <button className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-sm"
+                data-testid="reactivate-confirm-btn"
                 onClick={confirmReactivateAction}>
                 <RotateCcw size={14} /> Reactivate
               </button>
@@ -7849,6 +8280,7 @@ const RoomsBeds = () => {
               </label>
               <input
                 type="text"
+                data-testid="delete-room-confirm-input"
                 value={deleteConfirmText}
                 onChange={e => setDeleteConfirmText(e.target.value)}
                 placeholder={expectedText}
@@ -7860,6 +8292,7 @@ const RoomsBeds = () => {
               <button className="btn-secondary flex-1" onClick={() => { setConfirmDelete(null); setDeleteConfirmText('') }}>Cancel</button>
               <button
                 disabled={!canDelete}
+                data-testid="delete-room-forever-btn"
                 className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
                 onClick={confirmDeleteAction}>
                 <Trash2 size={14} /> Delete Forever
@@ -7879,6 +8312,7 @@ const RoomsBeds = () => {
           onBedClick={handleBedClick}
           onEditRoom={handleEditRoom}
           onAddExtraBed={(room, existingExtraCount, vacantNormalCount) => setExtraBedRoom({ room, existingExtraCount, vacantNormalCount })}
+          onViewTenant={handleViewTenant}
           loadingBedId={loadingBedId}
         />
       )}
@@ -7889,11 +8323,12 @@ const RoomsBeds = () => {
           title="Tenant Profile"
           subtitle={viewTenant.checkInDate ? `Since ${new Date(viewTenant.checkInDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : undefined}
           onClose={() => setViewTenant(null)}
+          width="max-w-2xl"
         >
           <TenantProfile
             tenant={viewTenant}
             propertyId={propertyId}
-            onVacate={() => setViewTenant(null)}
+            onVacate={() => { setViewTenant(null); refetchRooms(); refreshProperties() }}
             onDepositToggle={() => {}}
             onRefetch={() => getTenant(propertyId, viewTenant._id).then(r => setViewTenant(r.data?.data ?? viewTenant)).catch(() => {})}
           />

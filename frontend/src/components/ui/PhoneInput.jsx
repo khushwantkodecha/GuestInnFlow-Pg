@@ -33,6 +33,7 @@ const PhoneInput = ({
   disabled    = false,
   error       = false,
   autoFocus   = false,
+  testid,
 }) => {
   const parsed = parse(value)
   const [countryCode, setCountryCode] = useState(parsed.code)
@@ -82,6 +83,7 @@ const PhoneInput = ({
         placeholder={placeholder}
         disabled={disabled}
         autoFocus={autoFocus}
+        data-testid={testid}
         className="flex-1 min-w-0 px-3 py-2.5 text-sm bg-transparent text-slate-800 placeholder-slate-400 focus:outline-none"
       />
     </div>

@@ -10,7 +10,7 @@
  * generateRentForProperty handles all deduplication and "future cycle" guards,
  * so calling it daily is safe to re-run if the cron fires more than once.
  *
- * Follows the same pattern as reminderScheduler.js.
+ * Follows the same pattern as reservationCron.js.
  */
 
 const cron    = require('node-cron');
@@ -45,13 +45,21 @@ const runBillingCycleGeneration = async () => {
     status: { $in: ['active', 'notice'] },
   }).select('_id property billingStartDate checkInDate').lean();
 
-  // Collect unique property IDs where any tenant has billingDay = todayDay
+  // today.getMonth() is 0-based — needed by getEffectiveBillingDay
+  const todayMonth0 = today.getMonth();
+
+  // Collect unique property IDs where any tenant's effective billing day = todayDay.
+  // We use getEffectiveBillingDay rather than a raw equality check so that tenants
+  // whose billingDay exceeds the current month's length (29/30/31 in February,
+  // 31 in months with 30 days, etc.) are correctly matched on the last day of
+  // the month — e.g. billingDay=31 fires on Feb 28 (or Feb 29 in leap years).
   const propertySet = new Set();
   for (const t of tenants) {
     const anchor = t.billingStartDate || t.checkInDate;
     if (!anchor) continue;
-    const billingDay = new Date(anchor).getDate();
-    if (billingDay === todayDay) {
+    const billingDay     = new Date(anchor).getDate();
+    const effectiveDay   = rentService.getEffectiveBillingDay(year, todayMonth0, billingDay);
+    if (effectiveDay === todayDay) {
       propertySet.add(t.property.toString());
     }
   }

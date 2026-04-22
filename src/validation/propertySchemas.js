@@ -19,8 +19,8 @@ const addressSchema = z.object({
   pincode: z.string().trim().max(6,   { message: 'Pincode must be 6 characters or fewer' }).optional(),
 }).optional()
 
-const propertyTypeEnum = z.enum(['pg', 'hostel', 'apartment'], {
-  errorMap: () => ({ message: "Type must be one of: pg, hostel, apartment" }),
+const propertyTypeEnum = z.enum(['pg', 'hostel'], {
+  errorMap: () => ({ message: "Type must be one of: pg, hostel" }),
 })
 
 // ── Create ────────────────────────────────────────────────────────────────────

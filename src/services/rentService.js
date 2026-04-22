@@ -15,7 +15,7 @@ const Charge         = require('../models/Charge');
 const Tenant         = require('../models/Tenant');
 const Bed            = require('../models/Bed');
 const invoiceService = require('./invoiceService');
-const { runWithRetry } = require('../utils/runWithRetry');
+const { runWithRetry, runTx } = require('../utils/runWithRetry');
 
 const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -34,10 +34,9 @@ const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
  * @param {Date|null} checkInDate       — fallback anchor
  * @param {number}    month             — 1–12
  * @param {number}    year
- * @param {number}    graceDays         — tenant.dueDate (0–28, default 5)
  * @returns {{ cycleStart, cycleEnd, dueDate, billingDay }}
  */
-const computePersonalCycle = (billingStartDate, checkInDate, month, year, graceDays = 5) => {
+const computePersonalCycle = (billingStartDate, checkInDate, month, year) => {
   const anchor   = billingStartDate || checkInDate || new Date();
   const rawDay   = new Date(anchor).getDate();          // 1–31
   const lastDay  = new Date(year, month, 0).getDate();  // last day of target month
@@ -54,9 +53,8 @@ const computePersonalCycle = (billingStartDate, checkInDate, month, year, graceD
   const nextCycleStart = new Date(nextYear, nextMonth - 1, billingDayNext, 0, 0, 0, 0);
   const cycleEnd = new Date(nextCycleStart.getTime() - 1);  // 1 ms before midnight
 
-  // dueDate = cycleStart + graceDays (end of that day)
+  // dueDate = cycleStart (no grace days — due on billing day)
   const dueDate = new Date(cycleStart);
-  dueDate.setDate(dueDate.getDate() + Number(graceDays));
   dueDate.setHours(23, 59, 59, 999);
 
   return { cycleStart, cycleEnd, dueDate, billingDay };
@@ -71,6 +69,36 @@ const computePersonalCycle = (billingStartDate, checkInDate, month, year, graceD
  *   session so the read participates in snapshot isolation and sees this
  *   session's own prior writes.
  */
+/**
+ * computeFirstCycleCharge
+ *
+ * If a tenant's checkInDate falls WITHIN a billing cycle but AFTER its start,
+ * pro-rate the charge for the days actually occupied.
+ *
+ * e.g. cycle = Apr 1–30, checkIn = Apr 15 → 16/30 days → 53% of full rent.
+ *
+ * Returns:
+ *   chargeAmount       — pro-rated (or full) amount to bill
+ *   effectivePeriodStart — Apr 15 for first cycle; cycleStart for all others
+ */
+const computeFirstCycleCharge = (fullAmount, checkInDate, cycleStart, cycleEnd) => {
+  if (!checkInDate) return { chargeAmount: fullAmount, effectivePeriodStart: cycleStart };
+
+  const checkInNorm = new Date(checkInDate);
+  checkInNorm.setHours(0, 0, 0, 0);
+
+  // Only prorate for the first cycle: checkIn is inside this cycle but not on day 1
+  if (checkInNorm > cycleStart && checkInNorm <= cycleEnd) {
+    // +1 ms on cycleEnd makes both endpoints inclusive (cycleEnd is 1 ms before midnight)
+    const totalMs    = cycleEnd.getTime() + 1 - cycleStart.getTime();
+    const occupiedMs = cycleEnd.getTime() + 1 - checkInNorm.getTime();
+    const chargeAmount = Math.max(0, Math.round((fullAmount * occupiedMs) / totalMs));
+    return { chargeAmount, effectivePeriodStart: checkInNorm };
+  }
+
+  return { chargeAmount: fullAmount, effectivePeriodStart: cycleStart };
+};
+
 const getLastBalance = async (tenantId, session = null) => {
   const query = LedgerEntry.findOne({ tenant: tenantId })
     .sort({ createdAt: -1 })
@@ -78,6 +106,192 @@ const getLastBalance = async (tenantId, session = null) => {
   if (session) query.session(session);
   const entry = await query;
   return entry?.balanceAfter ?? 0;
+};
+
+// ─── Billing Cycle Detection ─────────────────────────────────────────────────
+
+/**
+ * getEffectiveBillingDay
+ *
+ * Returns the billing day for a given month, capped at the last day of that
+ * month. Handles short months (e.g. billingDay=31 in February → 28 or 29).
+ *
+ * @param {number} year
+ * @param {number} month0  — 0-based month index (0 = January)
+ * @param {number} billingDay — raw billing day derived from move-in date (1–31)
+ * @returns {number}
+ */
+const getEffectiveBillingDay = (year, month0, billingDay) => {
+  const lastDay = new Date(year, month0 + 1, 0).getDate();
+  return Math.min(billingDay, lastDay);
+};
+
+/**
+ * getCurrentBillingCycleMonthYear
+ *
+ * Returns the 1-based month and year of the billing cycle that is currently
+ * active (i.e. has already started as of today) for a given billing anchor.
+ *
+ * Logic:
+ *  today.getDate() >= effectiveBillingDay for this calendar month
+ *    → cycle started this month  → return (currentMonth, currentYear)
+ *  else
+ *    → cycle started last month  → return (prevMonth, prevYear)
+ *
+ * @param {Date|null} billingStartDate  — immutable anchor set at first assignment
+ * @param {Date|null} checkInDate       — fallback anchor
+ * @returns {{ month: number, year: number, billingDay: number } | null}
+ */
+const getCurrentBillingCycleMonthYear = (billingStartDate, checkInDate) => {
+  const anchor = billingStartDate || checkInDate;
+  if (!anchor) return null;
+
+  const billingDay  = new Date(anchor).getDate();
+  const today       = new Date();
+  const todayDate   = today.getDate();
+  const todayMonth0 = today.getMonth();   // 0-based
+  const todayYear   = today.getFullYear();
+
+  const effectiveDay = getEffectiveBillingDay(todayYear, todayMonth0, billingDay);
+
+  if (todayDate >= effectiveDay) {
+    // Cycle started this calendar month
+    return { month: todayMonth0 + 1, year: todayYear, billingDay };
+  }
+  // Cycle started last calendar month
+  const prevMonth0 = todayMonth0 === 0 ? 11 : todayMonth0 - 1;
+  const prevYear   = todayMonth0 === 0 ? todayYear - 1 : todayYear;
+  return { month: prevMonth0 + 1, year: prevYear, billingDay };
+};
+
+/**
+ * ensureCurrentCycleRentForTenant
+ *
+ * Option A (lazy reset): called whenever a tenant's rent list is fetched.
+ * Creates a pending RentPayment for the tenant's current billing cycle if one
+ * does not already exist — covering missed nightly cron runs and tenants who
+ * were assigned after the cron fired.
+ *
+ * Safety guarantees:
+ *  - Idempotent: if the record already exists it is returned immediately with
+ *    no DB writes.
+ *  - Race-safe: uses runWithRetry + in-transaction re-check so concurrent
+ *    fetches cannot create duplicate records.
+ *  - Skips vacated/reserved tenants and tenants without a rent amount.
+ *  - Skips if the cycle hasn't started yet (billingAnchor after cycleStart).
+ *
+ * @param {string} tenantId
+ * @param {string} propertyId
+ * @returns {Promise<object|null>}  existing or newly created RentPayment, or null if skipped
+ */
+const ensureCurrentCycleRentForTenant = async (tenantId, propertyId) => {
+  const tenant = await Tenant.findById(tenantId)
+    .select('status billingStartDate checkInDate rentAmount bed')
+    .lean();
+
+  if (!tenant) return null;
+  if (!['active', 'notice'].includes(tenant.status)) return null;
+  if (!tenant.rentAmount || tenant.rentAmount <= 0) return null;
+
+  const cycle = getCurrentBillingCycleMonthYear(tenant.billingStartDate, tenant.checkInDate);
+  if (!cycle) return null;
+
+  // Fast path: record already exists — no writes needed
+  const existing = await RentPayment.findOne({
+    tenant: tenantId,
+    month:  cycle.month,
+    year:   cycle.year,
+  }).lean();
+  if (existing) return existing;
+
+  // Compute the personal cycle window for this month/year
+  const { cycleStart, cycleEnd, dueDate } = computePersonalCycle(
+    tenant.billingStartDate, tenant.checkInDate, cycle.month, cycle.year
+  );
+
+  // Guard: tenant's first billing cycle must have started by cycleStart
+  // (prevents generating rent before move-in on month-boundary edge)
+  //
+  // IMPORTANT: normalize billingAnchor to LOCAL calendar midnight before
+  // comparing with cycleStart (which is already local midnight).
+  // checkInDate is stored as UTC midnight ("YYYY-MM-DD" → new Date → UTC 00:00),
+  // which equals 05:30 IST or similar in UTC+ zones. A raw timestamp comparison
+  // would make cycleStart (00:00 local) < billingAnchor (05:30 local) on the
+  // very day the tenant moves in, incorrectly skipping same-day rent generation.
+  const billingAnchor = tenant.billingStartDate || tenant.checkInDate;
+  if (billingAnchor) {
+    const anchorDay = new Date(billingAnchor);
+    anchorDay.setHours(0, 0, 0, 0);  // normalize to local calendar midnight
+    if (cycleStart < anchorDay) return null;
+  }
+
+  // Guard: never generate for a cycle that hasn't started yet
+  if (cycleStart > new Date()) return null;
+
+  const status = dueDate < new Date() ? 'overdue' : 'pending';
+
+  // Resolve room from bed — read-only, safe outside the transaction
+  let roomId = null;
+  if (tenant.bed) {
+    const bedDoc = await Bed.findById(tenant.bed).select('room').lean();
+    roomId = bedDoc?.room ?? null;
+  }
+
+  let createdRecord = null;
+  await runWithRetry(async (session) => {
+    createdRecord = null; // reset on transaction retry
+
+    // Race-safe re-check inside transaction
+    const dup = await RentPayment.findOne({
+      tenant: tenantId,
+      month:  cycle.month,
+      year:   cycle.year,
+    }).session(session).lean();
+    if (dup) { createdRecord = dup; return; }
+
+    const { chargeAmount, effectivePeriodStart } = computeFirstCycleCharge(
+      tenant.rentAmount, tenant.checkInDate, cycleStart, cycleEnd
+    );
+    const isProrated = chargeAmount < tenant.rentAmount;
+
+    const [record] = await RentPayment.create([{
+      tenant:      tenantId,
+      property:    propertyId,
+      room:        roomId,
+      bed:         tenant.bed ?? null,
+      amount:      chargeAmount,
+      month:       cycle.month,
+      year:        cycle.year,
+      periodStart: effectivePeriodStart,
+      periodEnd:   cycleEnd,
+      dueDate,
+      status,
+      isExtra:     tenant.billingSnapshot?.isExtra ?? false,
+      notes: isProrated ? `Pro-rated from ${effectivePeriodStart.toDateString()} (full rent ₹${tenant.rentAmount})` : null,
+    }], { session });
+
+    const prevBalance = await getLastBalance(tenantId, session);
+    const newBalance  = prevBalance + chargeAmount;
+
+    await LedgerEntry.create([{
+      tenant:        tenantId,
+      property:      propertyId,
+      type:          'debit',
+      amount:        chargeAmount,
+      balanceAfter:  newBalance,
+      referenceType: 'rent_generated',
+      referenceId:   record._id,
+      description:   isProrated
+        ? `Rent for ${MONTH_SHORT[cycle.month - 1]} ${cycle.year} (pro-rated)`
+        : `Rent for ${MONTH_SHORT[cycle.month - 1]} ${cycle.year}`,
+    }], { session });
+
+    await Tenant.findByIdAndUpdate(tenantId, { ledgerBalance: newBalance }, { session });
+
+    createdRecord = record;
+  });
+
+  return createdRecord;
 };
 
 // ─── Rent Cycle ───────────────────────────────────────────────────────────────
@@ -114,16 +328,21 @@ const generateRentForProperty = async (propertyId, month, year) => {
     }
 
     // ── Personal billing cycle ────────────────────────────────────────────────
-    const graceDays = tenant.dueDate ?? 5;
     const { cycleStart, cycleEnd, dueDate } = computePersonalCycle(
-      tenant.billingStartDate, tenant.checkInDate, month, year, graceDays
+      tenant.billingStartDate, tenant.checkInDate, month, year
     );
 
-    // Skip if the billing cycle hasn't started yet (tenant checked in after cycleStart)
+    // Skip if the billing cycle hasn't started yet (tenant checked in after cycleStart).
+    // Normalize billingAnchor to LOCAL calendar midnight — same timezone as cycleStart.
+    // See comment in ensureCurrentCycleRentForTenant for the full explanation.
     const billingAnchor = tenant.billingStartDate || tenant.checkInDate;
-    if (billingAnchor && cycleStart < new Date(billingAnchor)) {
-      skipped.push({ tenantId: tenant._id, name: tenant.name, reason: 'Billing cycle not started yet' });
-      continue;
+    if (billingAnchor) {
+      const anchorDay = new Date(billingAnchor);
+      anchorDay.setHours(0, 0, 0, 0);
+      if (cycleStart < anchorDay) {
+        skipped.push({ tenantId: tenant._id, name: tenant.name, reason: 'Billing cycle not started yet' });
+        continue;
+      }
     }
 
     // Skip if cycle start is in the future (generate only on/after cycle start)
@@ -152,34 +371,43 @@ const generateRentForProperty = async (propertyId, month, year) => {
       const dup = await RentPayment.findOne({ tenant: tenant._id, month, year }).session(session).lean();
       if (dup) return; // already committed by a concurrent request — skip
 
+      const { chargeAmount, effectivePeriodStart } = computeFirstCycleCharge(
+        tenant.rentAmount, tenant.checkInDate, cycleStart, cycleEnd
+      );
+      const isProrated = chargeAmount < tenant.rentAmount;
+
       const [record] = await RentPayment.create([{
         tenant:      tenant._id,
         property:    propertyId,
         room:        roomId,
         bed:         tenant.bed ?? null,
-        amount:      tenant.rentAmount,
+        amount:      chargeAmount,
         month,
         year,
-        periodStart: cycleStart,
+        periodStart: effectivePeriodStart,
         periodEnd:   cycleEnd,
         dueDate,
         status,
+        isExtra:     tenant.billingSnapshot?.isExtra ?? false,
+        notes: isProrated ? `Pro-rated from ${effectivePeriodStart.toDateString()} (full rent ₹${tenant.rentAmount})` : null,
       }], { session });
 
-      // Fix 2: pass session so the balance read participates in snapshot isolation
+      // Pass session so the balance read participates in snapshot isolation
       // and sees this session's own prior writes (prevents stale reads under concurrent generation).
       const prevBalance = await getLastBalance(tenant._id, session);
-      const newBalance  = prevBalance + tenant.rentAmount;
+      const newBalance  = prevBalance + chargeAmount;
 
       await LedgerEntry.create([{
         tenant:        tenant._id,
         property:      propertyId,
         type:          'debit',
-        amount:        tenant.rentAmount,
+        amount:        chargeAmount,
         balanceAfter:  newBalance,
         referenceType: 'rent_generated',
         referenceId:   record._id,
-        description:   `Rent for ${MONTH_SHORT[month - 1]} ${year}`,
+        description:   isProrated
+          ? `Rent for ${MONTH_SHORT[month - 1]} ${year} (pro-rated)`
+          : `Rent for ${MONTH_SHORT[month - 1]} ${year}`,
       }], { session });
 
       await Tenant.findByIdAndUpdate(tenant._id, { ledgerBalance: newBalance }, { session });
@@ -279,18 +507,15 @@ const allocatePayment = async (propertyId, tenantId, opts) => {
     }
   }
 
-  // Fix 1 & 2: Run everything inside a MongoDB multi-document transaction.
-  // session.withTransaction() automatically retries on transient errors
-  // (e.g. WriteConflict when two payments race for the same RentPayment record).
-  const session = await mongoose.startSession();
-
+  // Run everything inside a MongoDB multi-document transaction via runTx, which
+  // uses session.withTransaction() for automatic conflict-retry AND falls back
+  // to fn(null) on standalone MongoDB so local dev works without a replica set.
   let txResult;
   // Tracks records that need invoice sync after commit (populated inside tx,
   // reset on retry so we don't sync stale data if withTransaction retries).
   const invoiceSyncQueue = [];
 
-  try {
-    await session.withTransaction(async () => {
+  await runTx(async (session) => {
       // Reset retry state
       invoiceSyncQueue.length = 0;
 
@@ -439,10 +664,7 @@ const allocatePayment = async (propertyId, tenantId, opts) => {
       );
 
       txResult = { payment, allocated: appliedTo, advanceAmount, newBalance };
-    });
-  } finally {
-    await session.endSession();
-  }
+  });
 
   // Steps 11–12: Post-commit non-critical operations (outside transaction).
   // These are best-effort — a failure here does NOT roll back the payment.
@@ -453,14 +675,6 @@ const allocatePayment = async (propertyId, tenantId, opts) => {
       } catch (_) { /* non-fatal */ }
     }
 
-    // Payment confirmation reminder — lazy-require avoids circular dependency
-    try {
-      const reminderService = require('./reminderService');
-      await reminderService.sendPaymentConfirmation(tenantId, propertyId, {
-        paidAmount: amount,
-        newBalance: txResult.newBalance,
-      });
-    } catch (_) { /* non-fatal */ }
   }
 
   return txResult;
@@ -507,14 +721,12 @@ const reversePayment = async (propertyId, paymentId, opts = {}) => {
 
   const tenantId = originalPayment.tenant.toString();
 
-  const session = await mongoose.startSession();
   let txResult;
   // Captures the restored RentPayment state for each entry so invoice sync can
   // run post-commit without re-reading from the DB.
   const reversalSyncQueue = [];
 
-  try {
-    await session.withTransaction(async () => {
+  await runTx(async (session) => {
       // Reset on transaction retry
       reversalSyncQueue.length = 0;
 
@@ -600,10 +812,7 @@ const reversePayment = async (propertyId, paymentId, opts = {}) => {
       );
 
       txResult = { reversedPayment: pmt, newBalance };
-    });
-  } finally {
-    await session.endSession();
-  }
+  });
 
   // Fix 1: Sync linked invoices post-commit (non-critical — reversal is already committed).
   // syncInvoiceWithPayment skips void invoices automatically.
@@ -645,7 +854,13 @@ const getTenantLedger = async (tenantId, opts = {}) => {
   if (from || to) {
     filter.createdAt = {};
     if (from) filter.createdAt.$gte = new Date(from);
-    if (to)   filter.createdAt.$lte = new Date(to);
+    if (to) {
+      // Treat 'to' as end-of-day: append 23:59:59.999 so entries created
+      // anywhere during that calendar day are included.
+      const toDate = new Date(to);
+      toDate.setHours(23, 59, 59, 999);
+      filter.createdAt.$lte = toDate;
+    }
   }
   if (referenceType) filter.referenceType = referenceType;
   if (q && q.trim()) {
@@ -660,13 +875,74 @@ const getTenantLedger = async (tenantId, opts = {}) => {
     .limit(limit)
     .lean();
 
+  // Enrich payment entries with allocation breakdown from Payment.appliedTo / chargeAllocations
+  const paymentEntryIds = entries
+    .filter(e => ['payment_received', 'payment'].includes(e.referenceType) && e.referenceId)
+    .map(e => e.referenceId);
+
+  if (paymentEntryIds.length > 0) {
+    const payments = await Payment.find({ _id: { $in: paymentEntryIds } })
+      .populate('appliedTo.rentRecord', 'month year amount')
+      .populate('chargeAllocations.chargeRecord', 'description amount')
+      .lean();
+
+    const paymentMap = Object.fromEntries(payments.map(p => [String(p._id), p]));
+
+    for (const entry of entries) {
+      if (['payment_received', 'payment'].includes(entry.referenceType) && entry.referenceId) {
+        const pmt = paymentMap[String(entry.referenceId)];
+        if (pmt) {
+          entry.allocation = {
+            appliedTo:        pmt.appliedTo        ?? [],
+            chargeAllocations: pmt.chargeAllocations ?? [],
+            advanceApplied:   pmt.advanceApplied   ?? 0,
+          };
+        }
+      }
+    }
+  }
+
+  // Balance breakdown: rent owed from open RentPayment records + open Charges
+  // totalOutstanding is always ledger.currentBalance (single source of truth)
+  const [rentDueAgg, chargesDueAgg] = await Promise.all([
+    RentPayment.aggregate([
+      {
+        $match: {
+          tenant: new mongoose.Types.ObjectId(tenantId),
+          status: { $in: ['pending', 'partial', 'overdue'] },
+        },
+      },
+      {
+        $group: {
+          _id:   null,
+          total: { $sum: { $subtract: ['$amount', { $ifNull: ['$paidAmount', 0] }] } },
+        },
+      },
+    ]),
+    Charge.aggregate([
+      {
+        $match: {
+          tenant: new mongoose.Types.ObjectId(tenantId),
+          status: { $in: ['pending', 'partial'] },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$balance' } } },
+    ]),
+  ]);
+
+  const rentDue    = Math.max(0, rentDueAgg[0]?.total    ?? 0);
+  const chargesDue = Math.max(0, chargesDueAgg[0]?.total ?? 0);
+
   return {
     entries,
     currentBalance,
     total,
     page,
     limit,
-    pages: Math.ceil(total / limit),
+    pages:            Math.ceil(total / limit),
+    rentDue,
+    chargesDue,
+    totalOutstanding: currentBalance,   // single source of truth
   };
 };
 
@@ -787,7 +1063,7 @@ const syncOverdueRents = async (propertyId) => {
 const getPendingRents = async (propertyId) => {
   await syncOverdueRents(propertyId);
   return RentPayment.find({ property: propertyId, status: 'pending' })
-    .populate('tenant', 'name phone bed dueDate')
+    .populate('tenant', 'name phone bed')
     .sort({ dueDate: 1 });
 };
 
@@ -836,6 +1112,9 @@ const markAsPaid = async (rentId, { paymentDate, paymentMethod, notes, paidAmoun
 
 module.exports = {
   generateRentForProperty,
+  ensureCurrentCycleRentForTenant,
+  getCurrentBillingCycleMonthYear,
+  getEffectiveBillingDay,
   allocatePayment,
   reversePayment,
   getTenantLedger,

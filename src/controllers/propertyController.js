@@ -6,6 +6,7 @@ const RentPayment       = require('../models/RentPayment');
 const Expense           = require('../models/Expense');
 const PropertyAuditLog  = require('../models/PropertyAuditLog');
 const asyncHandler      = require('../utils/asyncHandler');
+const rentService       = require('../services/rentService');
 
 // ── Audit helper ──────────────────────────────────────────────────────────────
 // Computes a diff between two plain objects (only the top-level editable fields).
@@ -64,14 +65,17 @@ const buildStatsForProperties = async (propertyIds) => {
 
   // Run all aggregations in parallel
   const [bedsByStatus, tenantCounts, revenueAgg] = await Promise.all([
-    // Bed counts grouped by property + status
+    // Bed counts grouped by property + status + isExtra.
+    // Normal beds (isExtra:false) drive totalBeds/vacant/reserved/occupancyRate.
+    // Extra beds are counted separately so occupied can include both without
+    // inflating the declared capacity denominator.
     Bed.aggregate([
       { $match: { room: { $in: roomIds }, isActive: true } },
       { $lookup: { from: 'rooms', localField: 'room', foreignField: '_id', as: 'roomDoc' } },
       { $unwind: '$roomDoc' },
       {
         $group: {
-          _id: { property: '$roomDoc.property', status: '$status' },
+          _id: { property: '$roomDoc.property', status: '$status', isExtra: '$isExtra' },
           count: { $sum: 1 },
         },
       },
@@ -81,11 +85,13 @@ const buildStatsForProperties = async (propertyIds) => {
       { $match: { property: { $in: propertyIds }, status: { $in: ['active', 'notice'] } } },
       { $group: { _id: '$property', count: { $sum: 1 } } },
     ]),
-    // Revenue = SUM(tenant.rentAmount) for active tenants only.
+    // Revenue = SUM(tenant.rentAmount) for active + notice tenants.
+    // 'notice' tenants still occupy beds and pay rent until they vacate — excluding
+    // them would undercount revenue relative to the tenant head-count shown alongside.
     // billingSnapshot.isExtra flags extra-bed tenants for the breakdown.
     // Fallback to billingSnapshot.finalRent if rentAmount is somehow missing.
     Tenant.aggregate([
-      { $match: { property: { $in: propertyIds }, status: 'active' } },
+      { $match: { property: { $in: propertyIds }, status: { $in: ['active', 'notice'] } } },
       {
         $group: {
           _id: '$property',
@@ -113,16 +119,26 @@ const buildStatsForProperties = async (propertyIds) => {
 
   for (const p of propertyIds) {
     const pid = String(p);
-    bedMap[pid]     = { vacant: 0, occupied: 0, reserved: 0, total: 0 };
+    bedMap[pid]     = { vacant: 0, occupied: 0, reserved: 0, total: 0, extraOccupied: 0, extraTotal: 0 };
     tenantMap[pid]  = 0;
     revenueMap[pid] = { totalRevenue: 0, extraRevenue: 0 };
   }
 
   for (const b of bedsByStatus) {
-    const pid = String(b._id.property);
-    if (bedMap[pid]) {
-      bedMap[pid][b._id.status] = b.count;
-      bedMap[pid].total += b.count;
+    const pid     = String(b._id.property);
+    const isExtra = b._id.isExtra === true;
+    if (!bedMap[pid]) continue;
+
+    if (!isExtra) {
+      // Normal beds: contribute to declared capacity totals
+      bedMap[pid][b._id.status] = (bedMap[pid][b._id.status] ?? 0) + b.count;
+      bedMap[pid].total         += b.count;
+    } else {
+      // Extra beds: only occupied extra beds count toward occupiedBeds
+      bedMap[pid].extraTotal += b.count;
+      if (b._id.status === 'occupied') {
+        bedMap[pid].extraOccupied += b.count;
+      }
     }
   }
 
@@ -144,18 +160,24 @@ const buildStatsForProperties = async (propertyIds) => {
     const pid  = String(p);
     const beds = bedMap[pid];
     const rev  = revenueMap[pid];
+    // occupiedBeds = normal occupied + extra occupied (all paying tenants)
+    // totalBeds    = normal beds only (declared capacity)
+    // occupancyRate can exceed 100 when extra beds are in use — that is intentional
+    const totalOccupied = beds.occupied + beds.extraOccupied;
     result[pid] = {
       totalRooms:     roomCount[pid] ?? 0,
-      totalBeds:      beds.total,
-      occupiedBeds:   beds.occupied,
-      vacantBeds:     beds.vacant,
-      reservedBeds:   beds.reserved,
+      totalBeds:      beds.total,                               // normal beds only
+      extraBeds:      beds.extraTotal,                          // extra beds count (informational)
+      extraVacant:    beds.extraTotal - beds.extraOccupied,     // extra beds not currently occupied
+      occupiedBeds:   totalOccupied,                            // normal + extra occupied
+      vacantBeds:     beds.vacant,                              // normal vacant only
+      reservedBeds:   beds.reserved,                            // normal reserved only
       activeTenants:  tenantMap[pid],
       // Revenue fields — always sourced from tenant.rentAmount, never from room.baseRent
       totalRevenue:   rev.totalRevenue,
       normalRevenue:  rev.totalRevenue - rev.extraRevenue,
       extraRevenue:   rev.extraRevenue,
-      occupancyRate:  beds.total > 0 ? Math.round((beds.occupied / beds.total) * 100) : 0,
+      occupancyRate:  beds.total > 0 ? Math.round((totalOccupied / beds.total) * 100) : 0,
     };
   }
 
@@ -216,44 +238,23 @@ const getPropertyAnalytics = asyncHandler(async (req, res) => {
     months.push({ month: d.getMonth() + 1, year: d.getFullYear() });
   }
 
-  // Run all month queries in parallel
-  const [rentResults, tenantResults] = await Promise.all([
-    // Collected rent per month
-    RentPayment.aggregate([
-      {
-        $match: {
-          property: property._id,
-          status: 'paid',
-          month: { $in: months.map((m) => m.month) },
-          year:  { $in: [...new Set(months.map((m) => m.year))] },
-        },
-      },
-      { $group: { _id: { month: '$month', year: '$year' }, collected: { $sum: '$amount' } } },
-    ]),
-    // Active tenants snapshot per month (approximated from checkInDate/checkOutDate)
-    Tenant.aggregate([
-      { $match: { property: property._id } },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-        },
-      },
-    ]),
-  ]);
+  // Lazy rent generation: ensure the current billing cycle has RentPayment records
+  // before querying analytics. Idempotent — skips tenants that already have a record.
+  // Mirrors the same pattern used in getTenantRentHistory (rentController).
+  try {
+    await rentService.generateRentForProperty(
+      property._id,
+      now.getMonth() + 1,
+      now.getFullYear()
+    );
+  } catch (_) { /* non-fatal — analytics read continues regardless */ }
 
   // Also get current bed count for occupancy rate denominator
   const rooms   = await Room.find({ property: property._id, isActive: true }, '_id').lean();
   const roomIds = rooms.map((r) => r._id);
   const totalBeds = await Bed.countDocuments({ room: { $in: roomIds }, isActive: true });
 
-  // Map rent results by month-year key
-  const rentByKey = {};
-  for (const r of rentResults) {
-    rentByKey[`${r._id.year}-${r._id.month}`] = r.collected;
-  }
-
-  // Build monthly rent per month from RentPayments grouped by month+year
+  // Build monthly payment totals: collected (paidAmount), expected (amount), paid-count, total-count
   const rentAll = await RentPayment.aggregate([
     {
       $match: {

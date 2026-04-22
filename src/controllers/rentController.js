@@ -1,5 +1,7 @@
+const mongoose    = require('mongoose');
 const Property    = require('../models/Property');
 const RentPayment = require('../models/RentPayment');
+const Charge      = require('../models/Charge');
 const Tenant      = require('../models/Tenant');
 const Payment     = require('../models/Payment');
 const rentService = require('../services/rentService');
@@ -39,7 +41,7 @@ const generateMonthlyRent = asyncHandler(async (req, res) => {
   res.status(201).json({
     success: true,
     message: `Rent generated for ${month}/${year}`,
-    data:    { created: created.length, skipped: skipped.length, records: created, skipped },
+    data:    { created: created.length, skipped: skipped.length, records: created, skippedRecords: skipped },
   });
 });
 
@@ -65,7 +67,7 @@ const getAllRents = asyncHandler(async (req, res) => {
   const rents = await RentPayment.find(filter)
     .populate({
       path: 'tenant',
-      select: 'name phone rentAmount dueDate ledgerBalance',
+      select: 'name phone rentAmount ledgerBalance status',
       populate: {
         path: 'bed',
         select: 'bedNumber room',
@@ -74,7 +76,32 @@ const getAllRents = asyncHandler(async (req, res) => {
     })
     .sort({ dueDate: 1 });
 
-  res.json({ success: true, count: rents.length, data: rents });
+  // ── Attach chargesDue per tenant (deduped aggregate) ─────────────────────
+  const tenantIds = [...new Set(
+    rents.map(r => r.tenant?._id?.toString()).filter(Boolean),
+  )];
+
+  const chargesMap = {};
+  if (tenantIds.length > 0) {
+    const chargeAggs = await Charge.aggregate([
+      {
+        $match: {
+          tenant: { $in: tenantIds.map(id => new mongoose.Types.ObjectId(id)) },
+          status: { $in: ['pending', 'partial'] },
+        },
+      },
+      { $group: { _id: '$tenant', chargesDue: { $sum: '$balance' } } },
+    ]);
+    chargeAggs.forEach(c => { chargesMap[c._id.toString()] = c.chargesDue || 0; });
+  }
+
+  const enriched = rents.map(r => {
+    const obj      = r.toObject({ virtuals: true });
+    obj.chargesDue = chargesMap[r.tenant?._id?.toString()] ?? 0;
+    return obj;
+  });
+
+  res.json({ success: true, count: enriched.length, data: enriched });
 });
 
 // GET /api/properties/:propertyId/rents/pending
@@ -105,6 +132,17 @@ const getTenantRentHistory = asyncHandler(async (req, res) => {
   if (!property) {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
+
+  // Option A — lazy billing cycle generation:
+  // Ensure the current cycle's RentPayment exists before returning the list.
+  // This covers missed nightly cron runs and tenants added after the cron fired.
+  // Errors are suppressed so a transient failure never blocks the read.
+  try {
+    await rentService.ensureCurrentCycleRentForTenant(
+      req.params.tenantId,
+      req.params.propertyId
+    );
+  } catch (_) { /* non-fatal — read continues regardless */ }
 
   await rentService.syncOverdueRents(req.params.propertyId);
 

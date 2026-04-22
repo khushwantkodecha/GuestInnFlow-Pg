@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// App.tsx — entry point for the GuestInnFlow React Native app.
+// App.tsx — entry point for the TenantInnFlow React Native app.
 //
 // Wraps everything in:
 //   AuthProvider   → global auth state (token + user)

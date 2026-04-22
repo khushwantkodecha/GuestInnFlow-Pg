@@ -105,6 +105,21 @@ const IncomeResult = ({ report }) => {
           sub={`${months.filter(m => m.overdue > 0).length} month(s)`} />
       </div>
 
+      {/* Extra bed revenue breakdown — only shown when extra beds contributed */}
+      {totals.extraBilled > 0 && (
+        <div className="flex items-center justify-between rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[11px] font-bold text-violet-600 uppercase tracking-wide">✦ Extra Beds</span>
+            <span className="text-[11px] text-violet-500 font-medium">
+              {fmt(totals.extraBilled)} billed · {fmt(totals.extraPaid)} collected
+            </span>
+          </div>
+          <span className="text-[11px] font-bold text-violet-600">
+            {fmt(totals.normalBilled)} normal
+          </span>
+        </div>
+      )}
+
       <div className="card overflow-hidden !p-0">
         <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
           <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Monthly Breakdown</p>

@@ -68,25 +68,41 @@ const getIncomeReport = asyncHandler(async (req, res) => {
     { $set: { status: 'overdue' } }
   );
 
-  // Group rent payments by month+year, then by status
-  const monthlyBreakdown = await RentPayment.aggregate([
-    {
-      $match: {
-        property: { $in: resolved.ids },
-        dueDate: { $gte: range.start, $lte: range.end },
+  const matchStage = {
+    property: { $in: resolved.ids },
+    dueDate:  { $gte: range.start, $lte: range.end },
+  };
+
+  // Run both aggregations in parallel: full breakdown + extra-only totals
+  const [monthlyBreakdown, extraAgg] = await Promise.all([
+    // Group by month+year+status (all records)
+    RentPayment.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: { month: '$month', year: '$year', status: '$status' },
+          totalAmount: { $sum: '$amount' },
+          count:       { $sum: 1 },
+        },
       },
-    },
-    {
-      $group: {
-        _id: { month: '$month', year: '$year', status: '$status' },
-        totalAmount: { $sum: '$amount' },
-        count: { $sum: 1 },
+      { $sort: { '_id.year': 1, '_id.month': 1 } },
+    ]),
+    // Extra-only period totals
+    RentPayment.aggregate([
+      { $match: { ...matchStage, isExtra: true } },
+      {
+        $group: {
+          _id:     null,
+          billed:  { $sum: '$amount' },
+          paid:    { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$amount', 0] } },
+          pending: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, '$amount', 0] } },
+          overdue: { $sum: { $cond: [{ $eq: ['$status', 'overdue'] }, '$amount', 0] } },
+        },
       },
-    },
-    { $sort: { '_id.year': 1, '_id.month': 1 } },
+    ]),
   ]);
 
-  // Reshape into { "2026-04": { paid, pending, overdue, total } }
+  // Reshape monthly into { "2026-04": { paid, pending, overdue, total } }
   const monthMap = {};
   for (const row of monthlyBreakdown) {
     const key = `${row._id.year}-${String(row._id.month).padStart(2, '0')}`;
@@ -107,15 +123,22 @@ const getIncomeReport = asyncHandler(async (req, res) => {
   const totals = months.reduce(
     (acc, m) => {
       acc.totalBilled += m.totalBilled;
-      acc.paid += m.paid;
-      acc.pending += m.pending;
-      acc.overdue += m.overdue;
+      acc.paid        += m.paid;
+      acc.pending     += m.pending;
+      acc.overdue     += m.overdue;
       return acc;
     },
     { totalBilled: 0, paid: 0, pending: 0, overdue: 0 }
   );
   totals.collectionRate =
     totals.totalBilled > 0 ? Math.round((totals.paid / totals.totalBilled) * 100) : 0;
+
+  // Extra bed breakdown — always present; zeros when no extra beds
+  const extraRaw = extraAgg[0] ?? { billed: 0, paid: 0, pending: 0, overdue: 0 };
+  totals.extraBilled  = extraRaw.billed;
+  totals.extraPaid    = extraRaw.paid;
+  totals.normalBilled = totals.totalBilled - extraRaw.billed;
+  totals.normalPaid   = totals.paid - extraRaw.paid;
 
   res.json({
     success: true,

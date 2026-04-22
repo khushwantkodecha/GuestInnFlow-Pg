@@ -1,15 +1,581 @@
-import { Settings as SettingsIcon } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import {
+  User, Lock, Shield, Info, LogOut, ChevronRight,
+  Save, RefreshCw, Check, CheckCircle2,
+  IndianRupee, Banknote, Landmark, CreditCard,
+  ArrowDownUp, Layers, Wallet, Building2,
+} from 'lucide-react'
+import { useAuth }     from '../context/AuthContext'
+import { useProperty } from '../context/PropertyContext'
+import { useToast }    from '../context/ToastContext'
+import { useNavigate } from 'react-router-dom'
 
-const Settings = () => (
-  <div className="max-w-2xl space-y-4">
-    <div className="card p-8 flex flex-col items-center text-center gap-3">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-50 border border-primary-100">
-        <SettingsIcon size={22} className="text-primary-500" />
-      </div>
-      <h2 className="text-lg font-bold text-slate-800">Settings</h2>
-      <p className="text-sm text-slate-500">Account and application settings coming soon.</p>
-    </div>
+// ── Payment method definitions ─────────────────────────────────────────────────
+const PAYMENT_METHODS = [
+  { id: 'cash',          label: 'Cash',          icon: Banknote,    desc: 'Physical cash payments' },
+  { id: 'upi',           label: 'UPI',           icon: IndianRupee, desc: 'UPI, PhonePe, GPay, Paytm' },
+  { id: 'bank_transfer', label: 'Bank Transfer', icon: Landmark,    desc: 'NEFT, RTGS, IMPS' },
+  { id: 'cheque',        label: 'Cheque',        icon: CreditCard,  desc: 'Cheque / DD payments' },
+]
+const DEFAULT_METHODS = ['cash', 'upi', 'bank_transfer', 'cheque']
+const pmKey  = (id) => `pm_${id}`
+const loadPM = (id) => { try { return JSON.parse(localStorage.getItem(pmKey(id))) ?? DEFAULT_METHODS } catch { return DEFAULT_METHODS } }
+const savePM = (id, arr) => localStorage.setItem(pmKey(id), JSON.stringify(arr))
+
+// ── Shared primitives ──────────────────────────────────────────────────────────
+const SectionHead = ({ title, desc }) => (
+  <div className="mb-6">
+    <h2 className="text-base font-bold text-slate-800">{title}</h2>
+    {desc && <p className="text-sm text-slate-400 mt-0.5">{desc}</p>}
   </div>
 )
+
+// ── Profile panel ──────────────────────────────────────────────────────────────
+const sanitizePhone = (val) => (val ?? '').replace(/\D/g, '').slice(0, 10)
+
+const ProfilePanel = ({ user, onUpdate }) => {
+  const toast      = useToast()
+  const hasSynced  = useRef(false)
+  const [name,      setName]      = useState(user?.name  ?? '')
+  const [phone,     setPhone]     = useState(sanitizePhone(user?.phone))
+  const [saving,    setSaving]    = useState(false)
+  const [error,     setError]     = useState('')
+  const [phoneErr,  setPhoneErr]  = useState('')
+  const [lastSaved, setLastSaved] = useState(null)
+
+  // Sync form when user loads after mount (e.g. page refresh while on settings)
+  useEffect(() => {
+    if (user && !hasSynced.current) {
+      hasSynced.current = true
+      setName(user.name ?? '')
+      setPhone(sanitizePhone(user.phone))
+    }
+  }, [user])
+
+  const initials   = (user?.name ?? '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+  const savedPhone = sanitizePhone(user?.phone)
+  const dirty      = name.trim() !== (user?.name ?? '') || phone !== savedPhone
+
+  const validatePhone = (val) => {
+    if (!val.trim()) return ''
+    if (!/^\d{10}$/.test(val.trim())) return 'Phone must be exactly 10 digits'
+    return ''
+  }
+
+  const handlePhoneChange = (e) => {
+    const val = e.target.value.replace(/\D/g, '').slice(0, 10)
+    setPhone(val)
+    setPhoneErr(val ? validatePhone(val) : '')
+    setError('')
+  }
+
+  const handleSave = async () => {
+    if (!name.trim()) { setError('Name cannot be empty'); return }
+    const pErr = validatePhone(phone)
+    if (pErr) { setPhoneErr(pErr); return }
+    setSaving(true); setError('')
+    try {
+      await onUpdate({ name: name.trim(), phone: phone.trim() || undefined })
+      setLastSaved(new Date())
+      toast('Profile updated successfully', 'success')
+    } catch (err) {
+      setError(err.response?.data?.message ?? 'Failed to save. Please try again.')
+      toast('Failed to save profile', 'error')
+    } finally { setSaving(false) }
+  }
+
+  const fmtTime = (d) => d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <>
+      <SectionHead title="Profile" desc="Your account details" />
+
+      {/* Avatar card */}
+      <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 mb-6">
+        <div className="shrink-0 flex h-14 w-14 items-center justify-center rounded-2xl text-lg font-bold text-white"
+          style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}>
+          {initials}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-base font-bold text-slate-800 truncate">{user?.name ?? '—'}</p>
+          <p className="text-sm text-slate-400 truncate">{user?.email ?? '—'}</p>
+        </div>
+        <div className="shrink-0 flex items-center gap-1.5 rounded-full px-3 py-1 bg-emerald-50 border border-emerald-200">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          <span className="text-[11px] font-semibold text-emerald-600">Active</span>
+        </div>
+      </div>
+
+      {/* Editable fields */}
+      <div className="space-y-4">
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Full Name</label>
+          <input
+            value={name}
+            onChange={e => { setName(e.target.value); setError('') }}
+            placeholder="Your name"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-[#60C3AD]/30 focus:border-[#60C3AD] transition-colors"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Phone</label>
+          <input
+            value={phone}
+            onChange={handlePhoneChange}
+            placeholder="10-digit mobile number"
+            inputMode="numeric"
+            className={`w-full rounded-xl border bg-white px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 transition-colors ${
+              phoneErr ? 'border-red-300 focus:ring-red-200 focus:border-red-400' : 'border-slate-200 focus:ring-[#60C3AD]/30 focus:border-[#60C3AD]'
+            }`}
+          />
+          {phoneErr
+            ? <p className="text-[11px] text-red-500 mt-1">{phoneErr}</p>
+            : <p className="text-[11px] text-slate-400 mt-1">Numbers only, exactly 10 digits</p>
+          }
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Email</label>
+          <div className="w-full rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-400 flex items-center justify-between">
+            <span>{user?.email ?? '—'}</span>
+            <span className="text-[10px] bg-slate-200 text-slate-500 px-2 py-0.5 rounded-full font-medium">Cannot change</span>
+          </div>
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5">
+            <p className="text-[12px] text-red-600 font-medium">{error}</p>
+          </div>
+        )}
+
+        {/* Sticky save bar */}
+        <div className="flex items-center justify-between pt-2 border-t border-slate-100 sticky bottom-0 bg-white pb-1">
+          <div>
+            {lastSaved && (
+              <p className="text-[10px] text-slate-400">Last updated: {fmtTime(lastSaved)}</p>
+            )}
+          </div>
+          <button
+            onClick={handleSave}
+            disabled={!dirty || saving || !!phoneErr}
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}
+          >
+            {saving
+              ? <><RefreshCw size={13} className="animate-spin" /> Saving…</>
+              : <><Save size={13} /> Save Changes</>}
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ── Payments panel ─────────────────────────────────────────────────────────────
+const PaymentsPanel = ({ selectedProperty }) => {
+  const toast = useToast()
+  const [enabled, setEnabled] = useState(() => selectedProperty ? loadPM(selectedProperty._id) : DEFAULT_METHODS)
+  const [saved,   setSaved]   = useState(() => selectedProperty ? loadPM(selectedProperty._id) : DEFAULT_METHODS)
+
+  useEffect(() => {
+    if (selectedProperty) {
+      const m = loadPM(selectedProperty._id)
+      setEnabled(m)
+      setSaved(m)
+    }
+  }, [selectedProperty?._id])
+
+  const dirty = [...enabled].sort().join() !== [...saved].sort().join()
+
+  const toggle = (id) => setEnabled(prev => {
+    if (prev.includes(id)) return prev.length <= 1 ? prev : prev.filter(m => m !== id)
+    return [...prev, id]
+  })
+
+  const handleSave = () => {
+    if (!selectedProperty) return
+    savePM(selectedProperty._id, enabled)
+    setSaved([...enabled])
+    toast('Payment methods updated', 'success')
+  }
+
+  return (
+    <>
+      <SectionHead
+        title="Payment Methods"
+        desc={selectedProperty ? `For ${selectedProperty.name}` : 'Select a property first'}
+      />
+
+      <div className="space-y-2 mb-5">
+        {PAYMENT_METHODS.map(({ id, label, icon: Icon, desc }) => {
+          const on = enabled.includes(id)
+          return (
+            <button key={id} type="button" onClick={() => toggle(id)}
+              className={`w-full flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all duration-200 ${
+                on
+                  ? 'border-[#60C3AD]/40 bg-white shadow-sm hover:border-[#60C3AD]/60'
+                  : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+              }`}>
+              <span className="shrink-0 flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-200"
+                style={on
+                  ? { background: 'rgba(96,195,173,0.12)', color: '#60C3AD' }
+                  : { background: '#e2e8f0', color: '#94a3b8' }}>
+                <Icon size={15} />
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className={`text-sm font-semibold transition-colors duration-200 ${on ? 'text-slate-700' : 'text-slate-500'}`}>{label}</p>
+                  {!on && (
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-slate-200 text-slate-500">
+                      Disabled
+                    </span>
+                  )}
+                </div>
+                <p className={`text-[11px] mt-0.5 transition-colors duration-200 ${on ? 'text-slate-400' : 'text-slate-400'}`}>{desc}</p>
+              </div>
+              <span className={`shrink-0 flex h-5 w-5 items-center justify-center rounded-full border-2 transition-all duration-200 ${
+                on ? 'border-[#60C3AD] bg-[#60C3AD]' : 'border-slate-300 bg-white'
+              }`}>
+                {on && <Check size={10} className="text-white" strokeWidth={3} />}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 mb-4">
+        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+          Only enabled methods will appear when recording payments.
+        </p>
+        <p className="text-[11px] text-slate-400 mt-0.5">Partial payments are always allowed.</p>
+      </div>
+
+      <div className="flex items-center justify-between pt-2 border-t border-slate-100 sticky bottom-0 bg-white pb-1">
+        <p className="text-[10px] text-slate-400">{enabled.length} of {PAYMENT_METHODS.length} enabled</p>
+        <button
+          onClick={handleSave}
+          disabled={!selectedProperty || !dirty}
+          className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}
+        >
+          <Save size={13} /> Save
+        </button>
+      </div>
+    </>
+  )
+}
+
+// ── Billing Rules panel ────────────────────────────────────────────────────────
+const BILLING_RULES = [
+  { icon: User,        title: 'Rent follows move-in date',       line: 'Generated monthly from check-in date'     },
+  { icon: ArrowDownUp, title: 'Payments clear oldest dues first', line: 'Applied to oldest pending amount'         },
+  { icon: Wallet,      title: 'Deposit is manual',               line: 'Used only when you apply it'              },
+  { icon: IndianRupee, title: 'Extra payment becomes advance',    line: 'Auto-applied to future rent'              },
+  { icon: Layers,      title: 'Partial payments allowed',        line: 'Any amount can be paid anytime'           },
+  { icon: Check,       title: 'Charges are manual',              line: 'Added only when you create them'          },
+]
+
+const HowBillingWorksPanel = () => (
+  <>
+    <SectionHead title="Billing Rules" desc="How the system handles money — always consistent." />
+    <div className="divide-y divide-slate-100 rounded-xl border border-slate-100 overflow-hidden mb-4">
+      {BILLING_RULES.map(({ icon: Icon, title, line }) => (
+        <div key={title} className="flex items-start gap-3 px-4 py-3.5 bg-white">
+          <span className="shrink-0 flex h-7 w-7 items-center justify-center rounded-lg mt-0.5"
+            style={{ background: 'rgba(96,195,173,0.10)', color: '#60C3AD' }}>
+            <Icon size={13} />
+          </span>
+          <div>
+            <p className="text-[13px] font-semibold text-slate-700">{title}</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">{line}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+    <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-100 px-3.5 py-3">
+      <span className="text-amber-400 mt-0.5 shrink-0 text-sm font-bold">💡</span>
+      <p className="text-[11px] text-amber-700 leading-relaxed">
+        <span className="font-semibold">Tip:</span> Use deposit when a tenant is about to vacate to quickly clear dues.
+      </p>
+    </div>
+  </>
+)
+
+// ── Security panel ─────────────────────────────────────────────────────────────
+const SECURITY_ITEMS = [
+  { icon: Lock,   label: 'Change Password',           desc: 'Update your login password',          soon: 'Available soon — contact support to change password now' },
+  { icon: Shield, label: 'Two-Factor Authentication', desc: 'Add an extra layer of security',       soon: 'Available soon'                                          },
+]
+
+const SecurityPanel = () => {
+  const lastLoginRaw = localStorage.getItem('gif_login_ts')
+  const lastLogin    = lastLoginRaw
+    ? new Date(lastLoginRaw).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : null
+
+  const handleContact = () => {
+    window.open('mailto:support@tenantinnflow.com?subject=Password Change Request&body=Please help me change my account password.', '_blank')
+  }
+
+  return (
+    <>
+      <SectionHead title="Security" desc="Password and account protection" />
+
+      {/* Info banner */}
+      <div className="rounded-xl bg-blue-50 border border-blue-100 px-4 py-3.5 mb-4">
+        <p className="text-[12px] font-semibold text-blue-700">Security features are being prepared.</p>
+        <p className="text-[11px] text-blue-600/80 mt-1 leading-relaxed">
+          Contact support for urgent access issues.
+        </p>
+      </div>
+
+      {/* Contact support action */}
+      <button
+        onClick={handleContact}
+        className="w-full flex items-center gap-3 p-4 rounded-xl border border-[#60C3AD]/30 bg-white hover:bg-[#60C3AD]/5 transition-colors mb-4 text-left"
+      >
+        <span className="shrink-0 flex h-8 w-8 items-center justify-center rounded-lg"
+          style={{ background: 'rgba(96,195,173,0.10)', color: '#60C3AD' }}>
+          <Lock size={14} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-slate-700">Need to change password?</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Contact support — we'll help immediately</p>
+        </div>
+        <ChevronRight size={14} className="text-slate-300 shrink-0" />
+      </button>
+
+      {/* Disabled items */}
+      <div className="space-y-2 mb-5">
+        {SECURITY_ITEMS.map(({ icon: Icon, label, desc, soon }) => (
+          <div key={label} className="flex items-start gap-3 p-4 rounded-xl border border-slate-100 bg-slate-50 cursor-not-allowed select-none">
+            <span className="shrink-0 flex h-8 w-8 items-center justify-center rounded-lg bg-slate-200 text-slate-400 mt-0.5">
+              <Icon size={14} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-slate-500">{label}</p>
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-600 border border-amber-100">
+                  Soon
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">{desc}</p>
+              <p className="text-[11px] text-slate-400/70 mt-1 italic">{soon}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Last login */}
+      {lastLogin && (
+        <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 mb-3">
+          <Shield size={12} className="text-slate-400 shrink-0" />
+          <p className="text-[11px] text-slate-500">Last login: <span className="font-medium">{lastLogin}</span></p>
+        </div>
+      )}
+
+      {/* Trust message */}
+      <div className="flex items-center gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-3.5 py-2.5">
+        <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
+        <p className="text-[11px] text-emerald-700 font-medium">Your data is securely stored and encrypted.</p>
+      </div>
+    </>
+  )
+}
+
+// ── About panel ────────────────────────────────────────────────────────────────
+const ISSUE_CATEGORIES = [
+  { id: 'payment', label: 'Payment issue',  subject: 'Payment Issue - TenantInnFlow',  body: 'Describe the payment issue:' },
+  { id: 'tenant',  label: 'Tenant issue',   subject: 'Tenant Issue - TenantInnFlow',   body: 'Describe the tenant issue:'  },
+  { id: 'bug',     label: 'Bug / error',    subject: 'Bug Report - TenantInnFlow',     body: 'Describe the bug or error:'  },
+]
+
+const AboutPanel = () => {
+  const [category, setCategory] = useState('payment')
+
+  const handleContact = () => {
+    const cat = ISSUE_CATEGORIES.find(c => c.id === category)
+    window.open(`mailto:support@tenantinnflow.com?subject=${encodeURIComponent(cat.subject)}&body=${encodeURIComponent(cat.body + '\n\n')}`, '_blank')
+  }
+
+  return (
+    <>
+      <SectionHead title="About" desc="TenantInnFlow — PG & Hostel Management" />
+
+      {/* App identity */}
+      <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 mb-5">
+        <div className="shrink-0 flex h-12 w-12 items-center justify-center rounded-2xl"
+          style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
+          <Building2 size={20} style={{ color: '#60C3AD' }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-slate-800">TenantInnFlow</p>
+          <p className="text-xs text-slate-400 mt-0.5">PG / Hostel Management Platform</p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="text-[12px] font-bold text-slate-700">1.0.0</p>
+          <p className="text-[10px] font-semibold mt-0.5 px-2 py-0.5 rounded-full inline-block"
+            style={{ background: 'rgba(96,195,173,0.12)', color: '#45a793' }}>
+            Latest
+          </p>
+        </div>
+      </div>
+
+      {/* Support section */}
+      <div className="rounded-xl border border-slate-100 overflow-hidden mb-2">
+        <div className="px-4 py-3.5 bg-slate-50 border-b border-slate-100">
+          <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Support</p>
+          <p className="text-sm font-medium text-slate-700 mt-1">Need help?</p>
+          <a href="mailto:support@tenantinnflow.com"
+            className="text-[12px] font-medium mt-0.5 inline-block transition-colors"
+            style={{ color: '#60C3AD' }}>
+            support@tenantinnflow.com
+          </a>
+        </div>
+
+        {/* Category selector */}
+        <div className="px-4 py-3.5 border-b border-slate-100">
+          <p className="text-[11px] font-semibold text-slate-400 mb-2">What's the issue about?</p>
+          <div className="flex gap-1.5 flex-wrap">
+            {ISSUE_CATEGORIES.map(c => (
+              <button key={c.id} type="button" onClick={() => setCategory(c.id)}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+                  category === c.id
+                    ? 'text-white'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                }`}
+                style={category === c.id ? { background: '#60C3AD' } : {}}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* CTA */}
+        <div className="px-4 py-3.5">
+          <button onClick={handleContact}
+            className="w-full flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+            style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}>
+            <Info size={13} /> Contact Support
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ── Logout modal ───────────────────────────────────────────────────────────────
+const LogoutModal = ({ onCancel, onConfirm }) => createPortal(
+  <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div className="absolute inset-0 animate-fadeIn"
+      style={{ background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(2px)' }}
+      onClick={onCancel} />
+    <div className="relative w-full max-w-sm rounded-t-2xl sm:rounded-2xl bg-white animate-scaleIn p-6 space-y-4"
+      style={{ border: '1px solid #E2E8F0', boxShadow: '0 8px 32px rgba(0,0,0,0.10)' }}>
+      <div className="flex items-start gap-3 rounded-xl bg-red-50 border border-red-200 px-4 py-3.5">
+        <LogOut size={18} className="text-red-500 mt-0.5 shrink-0" />
+        <div>
+          <p className="text-sm font-semibold text-red-700">Sign out?</p>
+          <p className="text-xs text-red-600/80 mt-1 leading-relaxed">You'll be returned to the login screen.</p>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onCancel}
+          className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
+          Cancel
+        </button>
+        <button onClick={onConfirm}
+          className="flex-1 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-600 transition-colors">
+          Sign out
+        </button>
+      </div>
+    </div>
+  </div>,
+  document.body
+)
+
+// ── Nav items ──────────────────────────────────────────────────────────────────
+const SECTIONS = [
+  { id: 'profile',      label: 'Profile',           icon: User        },
+  { id: 'payments',     label: 'Payments',           icon: IndianRupee },
+  { id: 'howitworks',   label: 'Billing Rules',       icon: Info        },
+  { id: 'security',     label: 'Security',           icon: Lock        },
+  { id: 'about',        label: 'About',              icon: Building2   },
+]
+
+// ── Main ───────────────────────────────────────────────────────────────────────
+const Settings = () => {
+  const { user, logout, updateUser }  = useAuth()
+  const { selectedProperty }          = useProperty()
+  const navigate                      = useNavigate()
+  const [active, setActive]           = useState('profile')
+  const [confirmLogout, setConfirmLogout] = useState(false)
+
+  const handleLogout = () => { logout(); navigate('/login') }
+
+  const renderPanel = () => {
+    switch (active) {
+      case 'profile':    return <ProfilePanel user={user} onUpdate={updateUser} />
+      case 'payments':   return <PaymentsPanel selectedProperty={selectedProperty} />
+      case 'howitworks': return <HowBillingWorksPanel />
+      case 'security':   return <SecurityPanel />
+      case 'about':      return <AboutPanel />
+      default:           return null
+    }
+  }
+
+  return (
+    <div className="flex gap-6 max-w-4xl" style={{ minHeight: 'calc(100vh - 120px)' }}>
+
+      {/* Left nav */}
+      <div className="w-52 shrink-0">
+        <div className="card overflow-hidden sticky top-6">
+          <nav className="p-2 space-y-0.5">
+            {SECTIONS.map(({ id, label, icon: Icon }) => {
+              const isActive = active === id
+              return (
+                <button key={id} onClick={() => setActive(id)}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-150 ${
+                    isActive ? 'text-[#45a793] font-semibold' : 'text-slate-500 font-medium hover:text-slate-700 hover:bg-slate-50'
+                  }`}
+                  style={isActive ? { background: 'rgba(96,195,173,0.10)' } : {}}>
+                  <span className="shrink-0 flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
+                    style={isActive
+                      ? { background: 'rgba(96,195,173,0.15)', color: '#60C3AD' }
+                      : { background: '#f1f5f9', color: '#94a3b8' }}>
+                    <Icon size={14} />
+                  </span>
+                  <span className="text-[13px] truncate">{label}</span>
+                  {isActive && <ChevronRight size={13} className="ml-auto shrink-0" style={{ color: '#60C3AD' }} />}
+                </button>
+              )
+            })}
+          </nav>
+
+          <div className="border-t border-slate-100 p-2">
+            <button onClick={() => setConfirmLogout(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-slate-400 font-medium hover:text-red-500 hover:bg-red-50 transition-all duration-150 group">
+              <span className="shrink-0 flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 group-hover:bg-red-100 transition-colors">
+                <LogOut size={14} />
+              </span>
+              <span className="text-[13px]">Sign out</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Right panel */}
+      <div className="flex-1 min-w-0">
+        <div className="card p-6">
+          {renderPanel()}
+        </div>
+      </div>
+
+      {confirmLogout && (
+        <LogoutModal onCancel={() => setConfirmLogout(false)} onConfirm={handleLogout} />
+      )}
+    </div>
+  )
+}
 
 export default Settings

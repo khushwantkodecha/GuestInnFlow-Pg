@@ -74,13 +74,20 @@ const rentPaymentSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ['cash', 'upi', 'bank_transfer', 'cheque', 'other'],
+      enum: ['cash', 'upi', 'bank_transfer', 'cheque'],
       default: null,
     },
     notes: {
       type: String,
       trim: true,
       default: null,
+    },
+    // Whether this rent record belongs to an extra (over-capacity) bed.
+    // Mirrored from tenant.billingSnapshot.isExtra at generation time so
+    // aggregations can split extra vs. normal revenue without a join.
+    isExtra: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }

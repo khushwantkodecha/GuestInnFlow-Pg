@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import { getMe } from '../api/auth'
+import { getMe, updateMe } from '../api/auth'
 
 const AuthContext = createContext(null)
 
@@ -21,6 +21,7 @@ export const AuthProvider = ({ children }) => {
 
   const loginUser = (token, userData) => {
     localStorage.setItem('token', token)
+    localStorage.setItem('gif_login_ts', new Date().toISOString())
     setUser(userData)
   }
 
@@ -29,8 +30,14 @@ export const AuthProvider = ({ children }) => {
     setUser(null)
   }
 
+  const updateUser = async (data) => {
+    const res = await updateMe(data)
+    setUser(res.data.data)
+    return res
+  }
+
   return (
-    <AuthContext.Provider value={{ user, loading, loginUser, logout }}>
+    <AuthContext.Provider value={{ user, loading, loginUser, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   )

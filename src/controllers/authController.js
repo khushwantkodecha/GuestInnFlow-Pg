@@ -37,4 +37,25 @@ const getMe = asyncHandler(async (req, res) => {
   res.json({ success: true, data: req.user });
 });
 
-module.exports = { register, login, getMe };
+// PUT /api/auth/me
+const updateMe = asyncHandler(async (req, res) => {
+  const { name, phone } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ success: false, message: 'Name cannot be empty' });
+  }
+
+  if (phone && !/^\d{10}$/.test(phone.trim())) {
+    return res.status(400).json({ success: false, message: 'Phone must be exactly 10 digits' });
+  }
+
+  const updated = await User.findByIdAndUpdate(
+    req.user._id,
+    { name: name.trim(), phone: phone ? phone.trim() : undefined },
+    { new: true, runValidators: true }
+  );
+
+  res.json({ success: true, data: updated });
+});
+
+module.exports = { register, login, getMe, updateMe };

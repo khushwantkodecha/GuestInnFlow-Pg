@@ -84,7 +84,7 @@ const ledgerEntrySchema = new mongoose.Schema(
     // Payment method — populated where applicable (payment, refund)
     method: {
       type: String,
-      enum: ['cash', 'upi', 'bank_transfer', 'cheque', 'deposit_adjustment', 'other', null],
+      enum: ['cash', 'upi', 'bank_transfer', 'cheque', 'deposit_adjustment', null],
       default: null,
     },
   },

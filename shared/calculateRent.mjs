@@ -5,8 +5,9 @@
  *   Backend  → require('../../shared/calculateRent')     [uses .js]
  *   Frontend → import from '@shared/calculateRent'       [alias → this file]
  *
- * ⚠️  KEEP IN SYNC WITH calculateRent.js.
- *      All logic changes must be applied to BOTH files.
+ * ⚠️  KEEP IN SYNC WITH calculateRent.js (the CJS source).
+ *      All logic changes must be applied to BOTH files — only module syntax differs.
+ *      This file exists solely because Vite cannot transform CJS outside node_modules.
  */
 
 /** Safety floor — prevents absurdly low splits in large dorms */
@@ -18,9 +19,9 @@ function result(finalRent, source, meta = {}) {
 
 /**
  * @param {Object} params
- * @param {Object} params.room            - { baseRent, rentType: 'per_bed'|'per_room' }
+ * @param {Object} params.room            - { baseRent }
  * @param {Object} params.bed             - { isExtra, isChargeable, extraCharge, rentOverride }
- * @param {number} params.normalOccupied
+ * @param {number} params.normalOccupied  - Not used for per_bed; kept for API compatibility.
  * @param {Object} [params.options]
  */
 export function calculateRent({ room, bed, normalOccupied, options = {} }) {
@@ -41,21 +42,6 @@ export function calculateRent({ room, bed, normalOccupied, options = {} }) {
   }
 
   // ── 3. Per Bed ─────────────────────────────────────────────────────────────
-  if (room.rentType === 'per_bed') {
-    let rent = room.baseRent;
-    if (rent > 0 && rent < MIN_RENT) rent = MIN_RENT;
-    return result(rent, 'per_bed');
-  }
-
-  // ── 4. Per Room (Split) ────────────────────────────────────────────────────
-  if (room.rentType === 'per_room') {
-    const divisor = Math.max(normalOccupied, 1);
-    let rent      = Math.floor(room.baseRent / divisor);
-    if (rent > 0 && rent < MIN_RENT) rent = MIN_RENT;
-    return result(rent, 'per_room_split', { divisor });
-  }
-
-  // ── Fallback (unknown rentType) ────────────────────────────────────────────
   let rent = room.baseRent;
   if (rent > 0 && rent < MIN_RENT) rent = MIN_RENT;
   return result(rent, 'per_bed');

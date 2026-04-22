@@ -9,6 +9,45 @@ const isNoReplicaSetError = (err) =>
   err.code === 20 || err.message?.includes('Transaction numbers');
 
 /**
+ * runTx
+ *
+ * Runs fn(session) inside a MongoDB multi-document transaction using the
+ * driver's session.withTransaction() — which automatically retries on
+ * transient write-conflicts (e.g. two payments racing for the same record).
+ *
+ * On standalone MongoDB (no replica set — typical in local dev), transparently
+ * falls back to running fn(null) without a transaction so the operation
+ * completes without requiring a replica-set configuration.
+ *
+ * @param {(session: ClientSession|null) => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+const runTx = async (fn) => {
+  const session = await mongoose.startSession();
+  let noReplica = false;
+  try {
+    session.startTransaction();
+    const result = await fn(session);
+    await session.commitTransaction();
+    return result;
+  } catch (err) {
+    try { await session.abortTransaction(); } catch (_) {}
+    if (isNoReplicaSetError(err)) {
+      noReplica = true;
+    } else {
+      throw err;
+    }
+  } finally {
+    // endSession is always safe to call; swallow any close errors so they
+    // don't mask the original error.
+    await session.endSession().catch(() => {});
+  }
+  if (noReplica) {
+    return fn(null);
+  }
+};
+
+/**
  * Runs `fn(session)` inside a MongoDB transaction with automatic retry on
  * transient errors. On standalone MongoDB (no replica set), transparently
  * falls back to running `fn(null)` without a transaction so local dev works
@@ -48,4 +87,4 @@ const runWithRetry = async (fn, maxRetries = 2) => {
   }
 };
 
-module.exports = { runWithRetry, isTransientError };
+module.exports = { runWithRetry, runTx, isTransientError };

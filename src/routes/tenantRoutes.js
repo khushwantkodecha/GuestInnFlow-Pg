@@ -4,6 +4,8 @@ const {
   getTenantAdvance, applyTenantAdvance, refundTenantAdvance,
   adjustDeposit, refundDeposit,
   fixBillingStart,
+  getTenantProfile,
+  vacateWithPayment,
 } = require('../controllers/tenantController');
 const { getTenantRentHistory } = require('../controllers/rentController');
 const { mergeTenants } = require('../controllers/mergeTenantController');
@@ -34,5 +36,11 @@ router.post('/:tenantId/deposit/refund', refundDeposit);
 
 // Billing start correction (admin escape hatch for immutable billingStartDate)
 router.patch('/:id/fix-billing-start', fixBillingStart);
+
+// Aggregated profile endpoint (replaces 4 separate calls)
+router.get('/:id/profile', getTenantProfile);
+
+// Atomic vacate + optional payment
+router.post('/:id/vacate-with-payment', vacateWithPayment);
 
 module.exports = router;

@@ -54,16 +54,14 @@ const recalculateRoomRent = async (room, session, reason, traceId) => {
       normalOccupied: normalCount,
     });
 
-    // Derive structured fields from the engine's source token
     const overrideApplied = source === 'override';
-    const divisorUsed     = source === 'per_room_split' ? meta.divisor : null;
 
     bed.tenant.rentAmount      = finalRent;
     bed.tenant.billingSnapshot = {
       baseRent:        room.baseRent,
-      rentType:        room.rentType,
+      rentType:        'per_bed',
       roomCapacity:    room.capacity,
-      divisorUsed,
+      divisorUsed:     null,
       overrideApplied,
       overrideSource:  overrideApplied ? 'bed' : null,
       isExtra:         false,
@@ -80,7 +78,7 @@ const recalculateRoomRent = async (room, session, reason, traceId) => {
         oldRent,
         newRent:     finalRent,
         source,
-        divisorUsed,
+        divisorUsed: null,
         reason,
         traceId:     tid,
         changedAt:   new Date(),
@@ -133,7 +131,6 @@ const recalculateRoomRent = async (room, session, reason, traceId) => {
     traceId:     tid,
     roomId:      room._id,
     reason,
-    rentType:    room.rentType,
     baseRent:    room.baseRent,
     normalCount,
     extraCount:  extraBeds.length,

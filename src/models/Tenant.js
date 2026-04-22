@@ -90,14 +90,6 @@ const tenantSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    dueDate: {
-      type: Number,
-      min: 0,
-      max: 28,
-      default: 5,
-      // Grace days after billing cycle start before rent is considered due (0–28).
-      // e.g. billingDay=13, graceDays=5 → rent due on the 18th.
-    },
     depositAmount: {
       type: Number,
       default: 0,
@@ -114,7 +106,16 @@ const tenantSchema = new mongoose.Schema(
     },
     depositStatus: {
       type: String,
-      enum: ['held', 'adjusted', 'refunded', 'forfeited', null],
+      // 'pending'  — amount recorded, not yet collected
+      // 'held'     — collected and held (= "paid" in spec terms)
+      // 'adjusted' — applied against rent dues
+      // 'refunded' — returned to tenant
+      // 'forfeited'— kept by property
+      enum: ['pending', 'held', 'adjusted', 'refunded', 'forfeited', null],
+      default: null,
+    },
+    depositPaidAt: {
+      type: Date,
       default: null,
     },
     // Billing snapshot — updated on every rent recalculation event
@@ -122,7 +123,7 @@ const tenantSchema = new mongoose.Schema(
     // finalRent mirrors rentAmount; other fields provide calculation context.
     billingSnapshot: {
       baseRent:        { type: Number },
-      rentType:        { type: String, enum: ['per_bed', 'per_room'] },
+      rentType:        { type: String, enum: ['per_bed'] },
       roomCapacity:    { type: Number },
       divisorUsed:     { type: Number },   // normalOccupied at the time of last recalc
       overrideApplied: { type: Boolean },
@@ -218,17 +219,16 @@ tenantSchema.index({ property: 1, status:    1 }, { name: 'prop_status' });
 tenantSchema.index({ property: 1, updatedAt: -1 }, { name: 'prop_recent' });
 
 // ── Profile completion ───────────────────────────────────────────────────────
-// A profile is complete when all 6 criteria are satisfied.
+// A profile is COMPLETE when the 7 fields required for daily rent tracking are present.
+// Optional fields (aadhaar, address, emergency contact, documents) do NOT block completion.
+// 'bed' is a system-assigned field (set via bed assignment), not user-fillable — excluded from profile fields.
 const PROFILE_FIELDS = [
   { key: 'name',             label: 'Name',              check: (t) => !!t.name },
   { key: 'phone',            label: 'Phone',             check: (t) => !!t.phone },
-  { key: 'aadharNumber',     label: 'ID Proof',          check: (t) => !!t.aadharNumber },
-  { key: 'agreement',        label: 'Agreement',         check: (t) => !!t.checkInDate && t.rentAmount > 0 },
-  { key: 'address',          label: 'Address',           check: (t) => !!t.address },
+  { key: 'moveInDate',       label: 'Move-in Date',      check: (t) => !!t.checkInDate },
+  { key: 'monthlyRent',      label: 'Monthly Rent',      check: (t) => !!(t.rentAmount > 0) },
+  { key: 'aadharNumber',     label: 'Aadhaar Number',    check: (t) => !!t.aadharNumber },
   { key: 'emergencyContact', label: 'Emergency Contact', check: (t) => !!(t.emergencyContact?.name && t.emergencyContact?.phone) },
-  { key: 'idProofUploaded',  label: 'ID Document',       check: (t) => !!(t.documents?.idProofUrl || t.idProofUploaded) },
-  { key: 'idVerified',       label: 'ID Verified',       check: (t) => !!(t.verification?.idVerified) },
-  { key: 'policeCheck',      label: 'Police Verification', check: (t) => t.verification?.policeStatus === 'verified' },
 ];
 
 // Stored field — kept in sync by pre-save hook so it can be queried/indexed.

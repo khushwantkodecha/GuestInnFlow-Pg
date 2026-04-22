@@ -2,7 +2,7 @@ import { X } from 'lucide-react'
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 
-const Modal = ({ title, onClose, children, size = 'md', disableBackdropClose = false }) => {
+const Modal = ({ title, onClose, children, size = 'md', disableBackdropClose = false, bodyClassName = 'overflow-y-auto px-5 py-5', zIndex = 'z-50' }) => {
   useEffect(() => {
     const handler = (e) => e.key === 'Escape' && onClose()
     document.addEventListener('keydown', handler)
@@ -21,7 +21,7 @@ const Modal = ({ title, onClose, children, size = 'md', disableBackdropClose = f
   }[size] ?? 'max-w-lg'
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div className={`fixed inset-0 ${zIndex} flex items-end sm:items-center justify-center p-0 sm:p-4`}>
       {/* Backdrop */}
       <div
         className="absolute inset-0 animate-fadeIn"
@@ -61,7 +61,7 @@ const Modal = ({ title, onClose, children, size = 'md', disableBackdropClose = f
         )}
 
         {/* Body */}
-        <div className="overflow-y-auto px-5 py-5">{children}</div>
+        <div className={bodyClassName}>{children}</div>
       </div>
     </div>,
     document.body

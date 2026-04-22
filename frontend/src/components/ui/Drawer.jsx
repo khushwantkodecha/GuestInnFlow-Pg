@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 
-const Drawer = ({ title, subtitle, onClose, children, width = 'max-w-lg', closeOnBackdrop = true }) => {
+const Drawer = ({ title, subtitle, onClose, children, width = 'max-w-lg', closeOnBackdrop = true, bodyClassName = 'flex-1 overflow-y-auto flex flex-col' }) => {
   useEffect(() => {
     const handler = (e) => e.key === 'Escape' && onClose()
     document.addEventListener('keydown', handler)
@@ -32,10 +32,10 @@ const Drawer = ({ title, subtitle, onClose, children, width = 'max-w-lg', closeO
         }}
       >
         {/* Header */}
-        <div className="flex shrink-0 items-start justify-between px-5 sm:px-6 py-4 sm:py-5 border-b border-slate-100">
+        <div className="flex shrink-0 items-start justify-between px-5 sm:px-6 py-3 border-b border-slate-100">
           <div>
             <h2 className="text-base font-semibold text-slate-800 tracking-tight">{title}</h2>
-            {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
+            {subtitle && <p className="mt-0.5 text-sm text-slate-400">{subtitle}</p>}
           </div>
           <button
             onClick={onClose}
@@ -46,7 +46,7 @@ const Drawer = ({ title, subtitle, onClose, children, width = 'max-w-lg', closeO
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto">{children}</div>
+        <div className={bodyClassName}>{children}</div>
       </div>
 
       <style>{`

@@ -32,7 +32,7 @@ const createRoomSchema = z
       .min(0,      { message: 'Base rent cannot be negative' })
       .max(100000, { message: 'Base rent cannot exceed ₹1,00,000' }),
 
-    rentType:            z.enum(['per_bed', 'per_room']).default('per_bed'),
+    rentType:            z.enum(['per_bed']).default('per_bed'),
     gender:              z.enum(['male', 'female', 'unisex']).default('unisex'),
     status:              z.enum(['available', 'maintenance', 'blocked']).default('available'),
     hasAC:               z.boolean().default(false),
@@ -76,7 +76,7 @@ const updateRoomSchema = z.object({
     .max(100000, { message: 'Base rent cannot exceed ₹1,00,000' })
     .optional(),
 
-  rentType:            z.enum(['per_bed', 'per_room']).optional(),
+  rentType:            z.enum(['per_bed']).optional(),
   gender:              z.enum(['male', 'female', 'unisex']).optional(),
   status:              z.enum(['available', 'maintenance', 'blocked']).optional(),
   hasAC:               z.boolean().optional(),

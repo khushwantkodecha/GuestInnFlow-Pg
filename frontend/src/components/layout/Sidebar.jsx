@@ -6,75 +6,32 @@ import {
   BedDouble,
   Users,
   CreditCard,
-  Receipt,
-  BarChart3,
   Settings,
   LogOut,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Check,
-  LayoutGrid,
   Home,
-  BookOpen,
-  FileText,
-  Bell,
-  Wallet,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useProperty } from '../../context/PropertyContext'
 
-// ── Nav structure ─────────────────────────────────────────────────────────────
-const NAV_SECTIONS = [
-  {
-    label: 'Main',
-    items: [
-      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    ],
-  },
-  {
-    label: 'Management',
-    items: [
-      { to: '/properties', label: 'Properties',   icon: Building2  },
-      { to: '/rooms',      label: 'Rooms & Beds', icon: BedDouble  },
-      { to: '/tenants',    label: 'Tenants',       icon: Users      },
-      { to: '/rent',       label: 'Rent Payments', icon: CreditCard },
-      { to: '/billing',    label: 'Billing',        icon: Wallet     },
-      { to: '/invoices',   label: 'Invoices',      icon: FileText   },
-      { to: '/reminders',  label: 'Reminders',     icon: Bell       },
-      { to: '/expenses',   label: 'Expenses',      icon: Receipt    },
-      { to: '/accounting', label: 'Accounting',    icon: BookOpen   },
-    ],
-  },
-  {
-    label: 'Analytics',
-    items: [
-      { to: '/reports', label: 'Reports', icon: BarChart3 },
-    ],
-  },
-  {
-    label: 'System',
-    items: [
-      { to: '/settings', label: 'Settings', icon: Settings },
-    ],
-  },
+// ── Nav items ─────────────────────────────────────────────────────────────────
+const MENU_ITEMS = [
+  { to: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard },
+  { to: '/properties', label: 'Properties',  icon: Building2       },
+  { to: '/rooms',      label: 'Rooms & Beds', icon: BedDouble      },
+  { to: '/tenants',    label: 'Tenants',      icon: Users          },
+  { to: '/rent',       label: 'Rent',         icon: CreditCard     },
+  { to: '/settings',   label: 'Settings',     icon: Settings       },
 ]
 
-// ── Dropdown items (shared between collapsed + expanded property selector) ────
-const DropdownItems = ({ isAllProperties, selectedProperty, properties, setSelectedProperty, setOpen }) => (
+// ── Dropdown items ────────────────────────────────────────────────────────────
+const DropdownItems = ({ selectedProperty, properties, setSelectedProperty, setOpen }) => (
   <>
-    <button
-      onClick={() => { setSelectedProperty(null); setOpen(false) }}
-      className={`dd-item ${isAllProperties ? 'dd-item--active' : ''} border-b border-slate-100 flex items-center justify-between`}
-    >
-      <div className="flex items-center gap-2 min-w-0">
-        <LayoutGrid size={11} className="shrink-0 text-slate-400" />
-        <span className="truncate italic">All Properties</span>
-      </div>
-      {isAllProperties && <Check size={12} className="shrink-0" style={{ color: '#60C3AD' }} />}
-    </button>
     {properties.map((p) => {
-      const active = !isAllProperties && selectedProperty?._id === p._id
+      const active = selectedProperty?._id === p._id
       return (
         <button
           key={p._id}
@@ -94,7 +51,7 @@ const DropdownItems = ({ isAllProperties, selectedProperty, properties, setSelec
 
 // ── Property Selector ─────────────────────────────────────────────────────────
 const PropertySelector = ({ collapsed }) => {
-  const { properties, selectedProperty, isAllProperties, setSelectedProperty } = useProperty()
+  const { properties, selectedProperty, setSelectedProperty } = useProperty()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -106,7 +63,7 @@ const PropertySelector = ({ collapsed }) => {
 
   if (!properties.length) return null
 
-  const displayName = isAllProperties ? 'All Properties' : (selectedProperty?.name ?? 'Select')
+  const displayName = selectedProperty?.name ?? 'Select'
 
   if (collapsed) {
     return (
@@ -116,8 +73,8 @@ const PropertySelector = ({ collapsed }) => {
           className="ps-icon-btn"
           title={displayName}
         >
-          {isAllProperties ? <LayoutGrid size={14} /> : <Home size={14} />}
-          {!isAllProperties && selectedProperty && (
+          <Home size={14} />
+          {selectedProperty && (
             <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-white" />
           )}
         </button>
@@ -128,7 +85,6 @@ const PropertySelector = ({ collapsed }) => {
               <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Switch Property</p>
             </div>
             <DropdownItems
-              isAllProperties={isAllProperties}
               selectedProperty={selectedProperty}
               properties={properties}
               setSelectedProperty={setSelectedProperty}
@@ -149,8 +105,8 @@ const PropertySelector = ({ collapsed }) => {
       <button onClick={() => setOpen((v) => !v)} className="ps-trigger" data-open={open || undefined}>
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="ps-trigger-icon">
-            {isAllProperties ? <LayoutGrid size={11} /> : <Home size={11} />}
-            {!isAllProperties && selectedProperty && (
+            <Home size={11} />
+            {selectedProperty && (
               <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 ring-1 ring-white" />
             )}
           </div>
@@ -165,7 +121,6 @@ const PropertySelector = ({ collapsed }) => {
       {open && (
         <div className="absolute left-3 right-3 top-full z-50 mt-1.5 rounded-2xl overflow-hidden bg-white border border-slate-200 shadow-[0_8px_30px_rgba(0,0,0,.10)] animate-scaleIn">
           <DropdownItems
-            isAllProperties={isAllProperties}
             selectedProperty={selectedProperty}
             properties={properties}
             setSelectedProperty={setSelectedProperty}
@@ -206,10 +161,10 @@ const Sidebar = ({ open, onClose, collapsed, onToggleCollapse }) => {
           {!collapsed && (
             <div className="ml-3">
               <p className="text-[14px] font-bold tracking-tight leading-none" style={{ color: '#334155' }}>
-                GuestInnFlow
+                TenantInnFlow
               </p>
               <p className="text-[9px] font-semibold uppercase tracking-widest leading-tight mt-0.5 text-slate-400">
-                PG Management
+                PG / Hostel
               </p>
             </div>
           )}
@@ -231,45 +186,30 @@ const Sidebar = ({ open, onClose, collapsed, onToggleCollapse }) => {
 
         {/* ── Nav ──────────────────────────────────────────────────────────── */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 scrollbar-none">
-          {NAV_SECTIONS.map(({ label, items }, sIdx) => (
-            <div key={label} className={sIdx > 0 ? 'mt-5' : ''}>
-
-              {/* Section label */}
-              {collapsed ? (
-                <div className="mx-auto w-6 h-px my-2.5 bg-slate-200" />
-              ) : (
-                <p className="mb-1 px-4 text-[10px] font-semibold uppercase tracking-widest select-none text-slate-400">
-                  {label}
-                </p>
-              )}
-
-              {/* Items */}
-              <div className="px-2 space-y-0.5">
-                {items.map(({ to, label: itemLabel, icon: Icon }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    onClick={handleNavClick}
-                    title={collapsed ? itemLabel : undefined}
-                    className={({ isActive }) =>
-                      `sb-nav ${isActive ? 'sb-nav--active' : 'sb-nav--default'} ${collapsed ? 'sb-nav--collapsed' : ''}`
-                    }
-                  >
-                    {({ isActive }) => (
-                      <>
-                        <span className={`sb-nav-icon-wrap ${isActive ? 'sb-nav-icon-wrap--active' : ''}`}>
-                          <Icon size={16} />
-                        </span>
-                        {!collapsed && (
-                          <span className="truncate text-[13px] font-medium">{itemLabel}</span>
-                        )}
-                      </>
+          <div className="px-2 space-y-0.5">
+            {MENU_ITEMS.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                onClick={handleNavClick}
+                title={collapsed ? label : undefined}
+                className={({ isActive }) =>
+                  `sb-nav ${isActive ? 'sb-nav--active' : 'sb-nav--default'} ${collapsed ? 'sb-nav--collapsed' : ''}`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <span className={`sb-nav-icon-wrap ${isActive ? 'sb-nav-icon-wrap--active' : ''}`}>
+                      <Icon size={16} />
+                    </span>
+                    {!collapsed && (
+                      <span className="truncate text-[13px] font-medium">{label}</span>
                     )}
-                  </NavLink>
-                ))}
-              </div>
-            </div>
-          ))}
+                  </>
+                )}
+              </NavLink>
+            ))}
+          </div>
         </nav>
 
         {/* ── User footer ───────────────────────────────────────────────────── */}

@@ -9,16 +9,13 @@ const roomRoutes = require('./routes/roomRoutes');
 const tenantRoutes = require('./routes/tenantRoutes');
 const rentRoutes = require('./routes/rentRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
-const notificationRoutes = require('./routes/notificationRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const searchRoutes      = require('./routes/searchRoutes');
 const accountingRoutes  = require('./routes/accountingRoutes');
 const invoiceRoutes     = require('./routes/invoiceRoutes');
-const reminderRoutes    = require('./routes/reminderRoutes');
 const { startReservationCron }        = require('./services/reservationCron');
 const { startRecurringExpenseCron }   = require('./services/recurringExpenseCron');
-const { startReminderScheduler }      = require('./services/reminderScheduler');
 const { startBillingCycleScheduler }  = require('./services/billingCycleScheduler');
 const { startOverdueSyncScheduler }           = require('./services/overdueSyncScheduler');
 const { startInvoiceReconciliationScheduler } = require('./services/invoiceReconciliationScheduler');
@@ -28,7 +25,6 @@ connectDB();
 // Start background jobs
 startReservationCron();
 startRecurringExpenseCron();
-startReminderScheduler();
 startBillingCycleScheduler();
 startOverdueSyncScheduler();
 startInvoiceReconciliationScheduler();
@@ -73,14 +69,11 @@ app.use('/api/properties/:propertyId/rooms', roomRoutes);
 app.use('/api/properties/:propertyId/tenants', tenantRoutes);
 app.use('/api/properties/:propertyId/rents', rentRoutes);
 app.use('/api/properties/:propertyId/expenses', expenseRoutes);
-app.use('/api/properties/:propertyId/notifications', notificationRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/search',   searchRoutes);
 app.use('/api/properties/:propertyId/accounting', accountingRoutes);
 app.use('/api/properties/:propertyId/invoices',   invoiceRoutes);
-app.use('/api/properties/:propertyId/reminders',  reminderRoutes);
-
 // 404
 app.use((req, res) => res.status(404).json({ success: false, message: 'Route not found' }));
 

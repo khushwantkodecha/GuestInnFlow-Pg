@@ -1,0 +1,62 @@
+
+═══════════════════════════════════════════════════════════════
+  GuestInnFlow — QA TEST REPORT
+  Generated: 4/14/2026, 3:12:21 PM
+═══════════════════════════════════════════════════════════════
+
+  Total:  47   ✅ Passed: 47   ❌ Failed: 0
+  Pass Rate: 100%
+
+─── RESULTS ──────────────────────────────────────────────────
+  ✅ AUTH-01 | Login page renders correctly
+  ✅ AUTH-02 | Login with invalid credentials shows error
+  ✅ AUTH-03 | Login with valid credentials lands on dashboard
+  ✅ AUTH-04 | Protected route redirects to login
+  ✅ NAV-01 | Sidebar shows all 6 nav items
+  ✅ NAV-02 | Navigate to Properties page
+  ✅ NAV-03 | Navigate to Rooms & Beds page
+  ✅ NAV-04 | Navigate to Tenants page
+  ✅ NAV-05 | Navigate to Settings page
+  ✅ PROP-01 | Properties page loads without error
+  ✅ PROP-02 | Empty state shown when no properties exist
+  ✅ PROP-03 | Add Property opens create modal
+  ✅ PROP-04 | Submit button disabled when name is empty
+  ✅ PROP-05 | Submit button enables after name is typed
+  ✅ PROP-06 | Live preview updates as user types name
+  ✅ PROP-07 | Cancel button closes modal without saving
+  ✅ PROP-08 | Create property (minimal — name only)
+  ✅ PROP-09 | Quick-setup modal "Maybe Later" dismisses
+  ✅ PROP-10 | Quick-setup "Set Up Rooms Now" navigates to /rooms
+  ✅ PROP-11 | Create property with full details
+  ✅ PROP-12 | Newly created property appears in list
+  ✅ PROP-13 | Property card shows status badge: "Setup Pending"
+  ✅ PROP-14 | Property card shows "Setup Pending" badge (0 beds)
+  ✅ PROP-15 | Property card KPI strip loads
+  ✅ PROP-16 | Overflow menu opens with all 4 items
+  ✅ PROP-17 | Overflow menu closes on outside click
+  ✅ PROP-18 | View Details modal opens
+  ✅ PROP-19 | View Details shows stats overview section
+  ✅ PROP-20 | Analytics modal opens
+  ✅ PROP-21 | Analytics shows "No data yet" for new property
+  ✅ PROP-22 | Edit modal opens with pre-filled name: "QA-AutoProp-1776159554895"
+  ✅ PROP-23 | Edit property saves new name
+  ✅ PROP-24 | Edited property name appears in card
+  ✅ PROP-25 | Search input is visible
+  ✅ PROP-26 | Search filters cards by name
+  ✅ PROP-27 | Clearing search restores all cards
+  ✅ PROP-28 | Filter tabs Active / Inactive / All are visible
+  ✅ PROP-29 | "All" tab shows all properties (All:32 vs Active:32)
+  ✅ PROP-30 | Deactivate opens confirm modal
+  ✅ PROP-31 | Cancel deactivation keeps property active
+  ✅ PROP-32 | Confirm deactivation moves property to Inactive
+  ✅ PROP-33 | Inactive tab shows deactivated property
+  ✅ PROP-34 | Reactivate button visible on inactive card
+  ✅ PROP-35 | Reactivate restores property to Active tab
+  ✅ PROP-36 | Hard delete modal requires property name confirmation
+  ✅ PROP-37 | Hard delete removes property permanently
+  ✅ AUTH-05 | Sign out logs user out
+
+─── FAILED TESTS SUMMARY ─────────────────────────────────────
+
+  Screenshots saved to: /Users/khushwantkodecha/Desktop/Work/PG-GuestInnFlow/frontend/test-screenshots
+═══════════════════════════════════════════════════════════════

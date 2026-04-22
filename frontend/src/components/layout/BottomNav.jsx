@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
-  LayoutDashboard, BedDouble, Users, Wallet,
-  MoreHorizontal, Building2, CreditCard, FileText,
-  Bell, Receipt, BookOpen, BarChart3, Settings,
-  LogOut, X, Home, LayoutGrid, ChevronDown, Check,
+  LayoutDashboard, BedDouble, Users, CreditCard,
+  MoreHorizontal, Building2, Settings,
+  LogOut, X, Home, ChevronDown, Check,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useProperty } from '../../context/PropertyContext'
@@ -14,29 +13,23 @@ const BAR_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/rooms',     label: 'Rooms',     icon: BedDouble        },
   { to: '/tenants',   label: 'Tenants',   icon: Users            },
-  { to: '/billing',   label: 'Payments',  icon: Wallet           },
+  { to: '/rent',      label: 'Rent',      icon: CreditCard       },
 ]
 
 // ── Secondary items (shown in the More sheet) ─────────────────────────────────
 const MORE_ITEMS = [
-  { to: '/properties', label: 'Properties', icon: Building2  },
-  { to: '/rent',       label: 'Rent',       icon: CreditCard },
-  { to: '/invoices',   label: 'Invoices',   icon: FileText   },
-  { to: '/reminders',  label: 'Reminders',  icon: Bell       },
-  { to: '/expenses',   label: 'Expenses',   icon: Receipt    },
-  { to: '/accounting', label: 'Accounting', icon: BookOpen   },
-  { to: '/reports',    label: 'Reports',    icon: BarChart3  },
-  { to: '/settings',   label: 'Settings',   icon: Settings   },
+  { to: '/properties', label: 'Properties', icon: Building2 },
+  { to: '/settings',   label: 'Settings',   icon: Settings  },
 ]
 
 // ── Property selector inside More sheet ───────────────────────────────────────
 const SheetPropertySelector = ({ onClose }) => {
-  const { properties, selectedProperty, isAllProperties, setSelectedProperty } = useProperty()
+  const { properties, selectedProperty, setSelectedProperty } = useProperty()
   const [open, setOpen] = useState(false)
 
   if (!properties.length) return null
 
-  const displayName = isAllProperties ? 'All Properties' : (selectedProperty?.name ?? 'Select property')
+  const displayName = selectedProperty?.name ?? 'Select property'
 
   return (
     <div className="px-4 py-3 border-b border-slate-100">
@@ -47,7 +40,7 @@ const SheetPropertySelector = ({ onClose }) => {
       >
         <div className="flex items-center gap-2 min-w-0">
           <div className="flex h-6 w-6 items-center justify-center rounded-md shrink-0" style={{ background: 'rgba(96,195,173,0.12)', color: '#60C3AD' }}>
-            {isAllProperties ? <LayoutGrid size={11} /> : <Home size={11} />}
+            <Home size={11} />
           </div>
           <span className="text-[13px] font-semibold text-slate-700 truncate">{displayName}</span>
         </div>
@@ -56,19 +49,8 @@ const SheetPropertySelector = ({ onClose }) => {
 
       {open && (
         <div className="mt-1.5 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-          <button
-            onClick={() => { setSelectedProperty(null); setOpen(false) }}
-            className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-[13px] font-medium border-b border-slate-100 transition-colors hover:bg-slate-50
-              ${isAllProperties ? 'text-emerald-600 bg-emerald-50/60' : 'text-slate-600'}`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <LayoutGrid size={12} className="shrink-0 text-slate-400" />
-              <span className="truncate italic">All Properties</span>
-            </div>
-            {isAllProperties && <Check size={12} style={{ color: '#60C3AD' }} className="shrink-0" />}
-          </button>
           {properties.map(p => {
-            const active = !isAllProperties && selectedProperty?._id === p._id
+            const active = selectedProperty?._id === p._id
             return (
               <button
                 key={p._id}
@@ -97,7 +79,7 @@ const BottomNav = () => {
   const { logout } = useAuth()
   const navigate   = useNavigate()
 
-  const closeMore   = ()  => setMoreOpen(false)
+  const closeMore    = ()  => setMoreOpen(false)
   const handleLogout = () => { logout(); navigate('/login') }
 
   return (
@@ -165,8 +147,8 @@ const BottomNav = () => {
                   <Building2 size={13} style={{ color: '#60C3AD' }} />
                 </div>
                 <div>
-                  <p className="text-[13px] font-bold text-slate-800 leading-none">GuestInnFlow</p>
-                  <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">PG Management</p>
+                  <p className="text-[13px] font-bold text-slate-800 leading-none">TenantInnFlow</p>
+                  <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">PG / Hostel</p>
                 </div>
               </div>
               <button

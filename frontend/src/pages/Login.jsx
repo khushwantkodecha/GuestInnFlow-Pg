@@ -65,7 +65,7 @@ const Login = () => {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm border border-white/20">
               <Building2 size={20} className="text-white" />
             </div>
-            <span className="text-white font-semibold text-lg tracking-tight">GuestInnFlow</span>
+            <span className="text-white font-semibold text-lg tracking-tight">TenantInnFlow</span>
           </div>
         </div>
 
@@ -93,7 +93,7 @@ const Login = () => {
 
         {/* Footer */}
         <div className="relative z-10 px-12 pb-8">
-          <p className="text-[11px] text-white/40">© {new Date().getFullYear()} GuestInnFlow · All rights reserved</p>
+          <p className="text-[11px] text-white/40">© {new Date().getFullYear()} TenantInnFlow · All rights reserved</p>
         </div>
       </div>
 
@@ -106,7 +106,7 @@ const Login = () => {
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-600">
               <Building2 size={18} className="text-white" />
             </div>
-            <span className="font-semibold text-gray-900">GuestInnFlow</span>
+            <span className="font-semibold text-gray-900">TenantInnFlow</span>
           </div>
           <div className="hidden lg:block" />
         </div>

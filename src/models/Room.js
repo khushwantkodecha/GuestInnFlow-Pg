@@ -35,7 +35,7 @@ const roomSchema = new mongoose.Schema(
     },
     rentType: {
       type: String,
-      enum: ['per_bed', 'per_room'],
+      enum: ['per_bed'],
       default: 'per_bed',
     },
     gender: {

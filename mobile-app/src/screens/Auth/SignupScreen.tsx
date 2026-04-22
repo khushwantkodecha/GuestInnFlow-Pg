@@ -213,7 +213,7 @@ export default function SignupScreen({ navigation }: Props) {
           <MaterialCommunityIcons name="office-building" size={26} color={T.p1} />
         </View>
 
-        <Text style={s.heroTitle}>GuestInnFlow</Text>
+        <Text style={s.heroTitle}>TenantInnFlow</Text>
         <Text style={s.heroSub}>Smart PG management platform</Text>
 
       </LinearGradient>

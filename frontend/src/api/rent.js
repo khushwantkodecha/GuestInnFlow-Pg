@@ -22,9 +22,11 @@ export const getTenantLedger = (propertyId, tenantId, params) =>
 export const addCharge = (propertyId, tenantId, data) =>
   api.post(`/properties/${propertyId}/rents/tenants/${tenantId}/charge`, data)
 
+// Reverse a previously recorded payment (creates a reversal LedgerEntry)
+export const reversePayment = (propertyId, paymentId, data) =>
+  api.post(`/properties/${propertyId}/rents/payments/${paymentId}/reverse`, data)
+
 // Legacy — prefer recordPayment
 export const markRentPaid = (propertyId, rentId, data) =>
   api.patch(`/properties/${propertyId}/rents/${rentId}/pay`, data)
 
-export const sendRentReminder = (propertyId, tenantId) =>
-  api.post(`/properties/${propertyId}/notifications/rent-reminder`, { tenantId })

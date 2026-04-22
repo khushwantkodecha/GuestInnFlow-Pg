@@ -31,6 +31,9 @@ export const unblockBed = (propertyId, roomId, bedId) =>
 export const createExtraBed = (propertyId, roomId, data) =>
   api.post(`/properties/${propertyId}/rooms/${roomId}/beds/extra`, data)
 
+export const updateExtraBedSettings = (propertyId, roomId, bedId, data) =>
+  api.patch(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/extra-settings`, data)
+
 export const rentPreview = (propertyId, roomId, bedId) =>
   api.get(`/properties/${propertyId}/rooms/${roomId}/beds/${bedId}/rent-preview`)
 

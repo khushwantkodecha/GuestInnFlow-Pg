@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Plus, Pencil, Trash2, MapPin, Building2, RotateCcw, X,
   AlertTriangle, BedDouble, Users, IndianRupee, ArrowRight,
-  Sparkles, CheckCircle2, Search,
+  CheckCircle2, Search,
   TrendingUp, AlertOctagon, FileText, MoreVertical,
 } from 'lucide-react'
 import {
@@ -24,33 +24,14 @@ import Modal from '../components/ui/Modal'
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
 
-// Deterministic accent color from property name
-const ACCENTS = [
-  { from: 'from-violet-500', to: 'to-purple-600',  solid: '#7C3AED' },
-  { from: 'from-blue-500',   to: 'to-cyan-600',    solid: '#2563EB' },
-  { from: 'from-emerald-500',to: 'to-teal-600',    solid: '#059669' },
-  { from: 'from-rose-500',   to: 'to-pink-600',    solid: '#E11D48' },
-  { from: 'from-amber-500',  to: 'to-orange-600',  solid: '#D97706' },
-  { from: 'from-teal-500',   to: 'to-emerald-600', solid: '#0D9488' },
-  { from: 'from-cyan-500',   to: 'to-blue-600',    solid: '#0891B2' },
-  { from: 'from-fuchsia-500',to: 'to-violet-600',  solid: '#A21CAF' },
-]
-const cardAccent = (str = '') => {
-  let h = 0
-  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0
-  return ACCENTS[Math.abs(h) % ACCENTS.length]
-}
-
-const TYPE_LABEL = { pg: 'PG', hostel: 'Hostel', apartment: 'Co-living' }
 
 const EMPTY_FORM = {
-  name: '', type: 'pg', description: '', isActive: true,
+  name: '', description: '', isActive: true,
   address: { street: '', city: '', state: '', pincode: '' },
 }
 
 const formEqual = (a, b) =>
   a.name        === b.name        &&
-  a.type        === b.type        &&
   a.description === b.description &&
   a.isActive    === b.isActive    &&
   a.address?.street  === b.address?.street  &&
@@ -90,7 +71,7 @@ const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd,
   const canSubmit = form.name.trim().length > 0 && !saving
 
   // Live preview display values
-  const previewName = form.name.trim() || (isAdd ? 'Your PG Name' : initial.name)
+  const previewName = form.name.trim() || (isAdd ? 'Your PG / Hostel Name' : initial.name)
   const previewCity = form.address?.city?.trim() || form.address?.state?.trim() || 'City, State'
 
   return (
@@ -104,7 +85,7 @@ const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd,
               {isAdd ? 'Add New Property' : 'Edit Property'}
             </h2>
             <p className="text-[11px] text-primary-200 mt-0.5">
-              {isAdd ? 'Set up your PG in seconds' : 'Update your property details'}
+              {isAdd ? 'Set up your PG / Hostel in seconds' : 'Update your property details'}
             </p>
           </div>
           <button
@@ -134,7 +115,7 @@ const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd,
             </p>
           </div>
           <span className="shrink-0 ml-auto text-[9px] font-black uppercase tracking-widest text-primary-300 bg-white/15 rounded-full px-2 py-0.5">
-            PG
+            PG / Hostel
           </span>
         </div>
       </div>
@@ -149,6 +130,7 @@ const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd,
           </label>
           <input
             autoFocus
+            data-testid="property-name-input"
             className={`input text-sm font-medium ${
               errors.name
                 ? 'border-red-400 focus:ring-red-400/20 focus:border-red-400'
@@ -264,6 +246,7 @@ const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd,
         </button>
         <button
           type="submit"
+          data-testid="property-submit-btn"
           disabled={!canSubmit}
           className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold text-white
             bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
@@ -287,7 +270,9 @@ const PropertyForm = ({ initial = EMPTY_FORM, onSubmit, saving, onCancel, isAdd,
 // ── Analytics Drawer ──────────────────────────────────────────────────────────
 const AnalyticsDrawer = ({ property, onClose }) => {
   const { data, loading } = useApi(() => getPropertyAnalytics(property._id), [property._id])
-  const trend = data?.data?.trend ?? []
+  const trend   = data?.data?.trend ?? []
+  // API always returns 6 month buckets; treat as "no data" when all collected+expected are zero
+  const hasData = trend.some((m) => m.collected > 0 || m.expected > 0)
 
   return (
     <Modal title={`Analytics — ${property.name}`} onClose={onClose}>
@@ -295,8 +280,14 @@ const AnalyticsDrawer = ({ property, onClose }) => {
         <div className="flex justify-center py-12">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-primary-500" />
         </div>
-      ) : trend.length === 0 ? (
-        <p className="text-center text-sm text-slate-400 py-10">No data yet for this property.</p>
+      ) : !hasData ? (
+        <div className="flex flex-col items-center gap-2 py-10 text-center">
+          <p className="text-sm font-semibold text-slate-500">No rent data yet</p>
+          <p className="text-[11px] text-slate-400 leading-relaxed max-w-xs">
+            Analytics appear once tenants are assigned and rent is active.
+            Visit the <span className="font-medium text-primary-500">Rent</span> page to generate this month's records.
+          </p>
+        </div>
       ) : (
         <div className="space-y-6">
           {/* Collected Rent chart */}
@@ -402,6 +393,7 @@ const HardDeleteModal = ({ property, onConfirm, onCancel, loading }) => {
       <div className="mb-5">
         <label className="label">Type <span className="font-bold text-slate-800">{property.name}</span> to confirm</label>
         <input
+          data-testid="hard-delete-confirm-input"
           className="input"
           placeholder={property.name}
           value={typed}
@@ -411,6 +403,7 @@ const HardDeleteModal = ({ property, onConfirm, onCancel, loading }) => {
       <div className="flex justify-end gap-2">
         <button className="btn-secondary" onClick={onCancel} disabled={loading}>Cancel</button>
         <button
+          data-testid="hard-delete-confirm-btn"
           disabled={!confirmed || loading}
           onClick={onConfirm}
           className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
@@ -489,7 +482,6 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef   = useRef(null)
   const inactive  = !p.isActive
-  const accent    = cardAccent(p._id ?? p.name)
   const s         = stats
   const occupancy = s ? s.occupancyRate : null
   const isSetupPending = s && s.totalBeds === 0
@@ -499,12 +491,14 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
   const occBar = occupancy === null ? 'bg-slate-200'
     : occupancy >= 80 ? 'bg-emerald-500' : occupancy >= 50 ? 'bg-amber-400' : 'bg-primary-500'
 
-  // Status badge
+  // Status badge — wait for stats before deciding Active vs Setup Pending
   const statusBadge = inactive
-    ? { cls: 'bg-red-50 text-red-600 border-red-200', label: 'Inactive' }
-    : isSetupPending
-      ? { cls: 'bg-amber-50 text-amber-700 border-amber-200', label: 'Setup Pending' }
-      : { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: 'Active' }
+    ? { cls: 'bg-red-50 text-red-600 border-red-200',       label: 'Inactive'       }
+    : !s
+      ? { cls: 'bg-slate-100 text-slate-400 border-slate-200', label: '·  ·  ·'       }
+      : isSetupPending
+        ? { cls: 'bg-amber-50 text-amber-700 border-amber-200', label: 'Setup Pending' }
+        : { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: 'Active'  }
 
   // Dynamic alerts
   const alerts = []
@@ -525,6 +519,7 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
 
   return (
     <div
+      data-testid={`property-card-${p._id}`}
       className={`relative rounded-2xl overflow-visible flex flex-col bg-white border transition-all duration-300
         ${inactive
           ? 'opacity-60 border-slate-200'
@@ -532,7 +527,7 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
         ${highlight ? 'ring-2 ring-primary-400 ring-offset-2 animate-highlightFade' : ''}`}>
 
       {/* Accent stripe */}
-      <div className={`h-1 w-full shrink-0 rounded-t-2xl ${inactive ? 'bg-slate-200' : `bg-gradient-to-r ${accent.from} ${accent.to}`}`} />
+      <div className={`h-1 w-full shrink-0 rounded-t-2xl ${inactive ? 'bg-slate-200' : `bg-gradient-to-r from-primary-500 to-primary-700`}`} />
 
       {/* ── HEADER ── */}
       <div className="px-4 pt-4 pb-3">
@@ -540,7 +535,7 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
           {/* Icon + name + location */}
           <div className="flex items-center gap-3 min-w-0">
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm
-              ${inactive ? 'bg-slate-100' : `bg-gradient-to-br ${accent.from} ${accent.to}`}`}>
+              ${inactive ? 'bg-slate-100' : `bg-gradient-to-br from-primary-500 to-primary-700`}`}>
               <Building2 size={18} className={inactive ? 'text-slate-400' : 'text-white'} />
             </div>
             <div className="min-w-0">
@@ -573,7 +568,7 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
               <div className="grid grid-cols-4 gap-0 divide-x divide-slate-100 rounded-xl bg-slate-50 border border-slate-200 overflow-hidden">
                 {[
                   {
-                    label: 'Revenue',
+                    label: 'Rent',
                     value: `₹${(s.totalRevenue ?? 0).toLocaleString('en-IN')}`,
                     cls: 'text-slate-800',
                     small: true,
@@ -595,11 +590,13 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
                     value: `${s.occupiedBeds}/${s.totalBeds}`,
                     cls: 'text-slate-800',
                     small: false,
+                    note: s.extraBeds > 0 ? `+${s.extraBeds}X` : null,
                   },
-                ].map(({ label, value, cls, small }) => (
+                ].map(({ label, value, cls, small, note }) => (
                   <div key={label} className="flex flex-col items-center text-center py-2.5 px-1">
                     <p className={`font-bold leading-tight tabular-nums ${small ? 'text-[11px]' : 'text-[13px]'} ${cls}`}>{value}</p>
                     <p className="text-[9px] font-medium text-slate-400 uppercase tracking-wide mt-0.5">{label}</p>
+                    {note && <span className="text-[8px] font-bold text-violet-500 mt-0.5">✦ {note}</span>}
                   </div>
                 ))}
               </div>
@@ -622,6 +619,7 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
                     <span className="flex items-center gap-1 text-[9px] text-slate-400">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
                       {s.vacantBeds} vacant
+                      {s.extraVacant > 0 && <span className="text-violet-400 font-semibold">+{s.extraVacant}X</span>}
                     </span>
                   </div>
                 </div>
@@ -666,7 +664,7 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
           <button
             onClick={(e) => { e.stopPropagation(); onManage?.(p) }}
             className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-semibold
-              bg-gradient-to-r ${accent.from} ${accent.to} text-white hover:opacity-90 active:scale-[.98] transition-all shadow-sm`}>
+              bg-gradient-to-r from-primary-500 to-primary-700 text-white hover:opacity-90 active:scale-[.98] transition-all shadow-sm`}>
             Manage Property <ArrowRight size={13} />
           </button>
 
@@ -680,7 +678,9 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
           {/* Overflow menu */}
           <div className="relative shrink-0" ref={menuRef}>
             <button
+              data-testid={`overflow-menu-${p._id}`}
               onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
+              aria-label="Property actions"
               className={`flex items-center justify-center w-9 h-[38px] rounded-xl border transition-colors
                 ${menuOpen ? 'bg-slate-100 border-slate-300 text-slate-700' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}>
               <MoreVertical size={15} />
@@ -688,19 +688,23 @@ const PropertyCard = ({ property: p, stats, highlight, onEdit, onDelete, onReact
             {menuOpen && (
               <div className="absolute right-0 bottom-full mb-2 w-44 rounded-xl bg-white border border-slate-200 shadow-xl shadow-slate-200/60 overflow-hidden z-20">
                 <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onView?.(p) }}
+                  data-testid="menu-view-details"
                   className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
                   <Building2 size={13} className="text-slate-400" /> View Details
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onAnalytics(p) }}
+                  data-testid="menu-analytics"
                   className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
                   <TrendingUp size={13} className="text-slate-400" /> Analytics
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEdit(p) }}
+                  data-testid="menu-edit"
                   className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
                   <Pencil size={13} className="text-slate-400" /> Edit Property
                 </button>
                 <div className="border-t border-slate-100 my-0.5" />
                 <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(p._id) }}
+                  data-testid="menu-deactivate"
                   className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-red-500 hover:bg-red-50 transition-colors">
                   <Trash2 size={13} /> Deactivate
                 </button>
@@ -721,9 +725,9 @@ const PropertyDetailModal = ({
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef   = useRef(null)
   const inactive  = !p.isActive
-  const accent    = cardAccent(p._id ?? p.name)
-  const occupancy = s?.occupancyRate ?? null
-  const isEmpty   = s && s.activeTenants === 0
+  const occupancy  = s?.occupancyRate ?? null
+  const noBeds     = s && s.totalBeds === 0
+  const noTenants  = s && s.totalBeds > 0 && s.activeTenants === 0
 
   const occColor = occupancy === null ? 'text-slate-500'
     : occupancy >= 80 ? 'text-emerald-600' : occupancy >= 50 ? 'text-amber-600' : 'text-slate-500'
@@ -740,7 +744,7 @@ const PropertyDetailModal = ({
   return (
     <Modal onClose={onClose} size="md">
       {/* ── HERO — bleeds to modal edges ── */}
-      <div className={`-mx-5 -mt-5 rounded-t-2xl bg-gradient-to-br ${accent.from} ${accent.to} px-5 pt-5 pb-5 mb-5`}>
+      <div className="-mx-5 -mt-5 rounded-t-2xl bg-gradient-to-br from-primary-500 to-primary-700 px-5 pt-5 pb-5 mb-5">
         {/* Top row: icon + name + close */}
         <div className="flex items-start gap-3">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-sm shadow-sm">
@@ -759,7 +763,6 @@ const PropertyDetailModal = ({
             </div>
 
             <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <span className="text-white/80 text-xs font-medium">{TYPE_LABEL[p.type] ?? p.type}</span>
               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold border
                 ${inactive ? 'bg-red-500/30 border-red-400/30 text-white' : 'bg-white/20 border-white/20 text-white'}`}>
                 {inactive ? 'Inactive' : 'Active'}
@@ -783,7 +786,7 @@ const PropertyDetailModal = ({
             <div className="flex items-center gap-1.5 rounded-lg bg-white/15 border border-white/10 px-2.5 py-1.5">
               <BedDouble size={11} className="text-white/70" />
               <span className="text-white text-[11px] font-semibold">
-                {s.occupiedBeds}/{s.totalBeds} beds
+                {s.occupiedBeds}/{s.totalBeds} beds{s.extraBeds > 0 ? ` · +${s.extraBeds}X` : ''}
               </span>
             </div>
             <div className="flex items-center gap-1.5 rounded-lg bg-white/15 border border-white/10 px-2.5 py-1.5">
@@ -833,6 +836,7 @@ const PropertyDetailModal = ({
                 {[
                   {
                     label: 'Total Beds', value: s.totalBeds,
+                    note: s.extraBeds > 0 ? `+${s.extraBeds} extra` : null,
                     icon: BedDouble, iconCls: 'text-slate-500',
                     iconBg: 'bg-slate-200/70', bg: 'bg-slate-50', border: 'border-slate-200', val: 'text-slate-700',
                   },
@@ -843,6 +847,7 @@ const PropertyDetailModal = ({
                   },
                   {
                     label: 'Vacant', value: s.vacantBeds,
+                    note: s.extraVacant > 0 ? `+${s.extraVacant} extra` : null,
                     icon: CheckCircle2, iconCls: 'text-emerald-500',
                     iconBg: 'bg-emerald-200/60', bg: 'bg-emerald-50', border: 'border-emerald-200', val: 'text-emerald-600',
                   },
@@ -851,7 +856,7 @@ const PropertyDetailModal = ({
                     icon: Users, iconCls: 'text-blue-500',
                     iconBg: 'bg-blue-200/60', bg: 'bg-blue-50', border: 'border-blue-200', val: 'text-blue-600',
                   },
-                ].map(({ label, value, icon: Icon, iconCls, iconBg, bg, border, val }) => (
+                ].map(({ label, value, note, icon: Icon, iconCls, iconBg, bg, border, val }) => (
                   <div key={label} className={`flex items-center gap-3 rounded-xl ${bg} border ${border} px-3.5 py-3`}>
                     <div className={`h-8 w-8 rounded-lg ${iconBg} flex items-center justify-center shrink-0`}>
                       <Icon size={15} className={iconCls} />
@@ -859,20 +864,21 @@ const PropertyDetailModal = ({
                     <div>
                       <p className={`text-xl font-bold leading-none ${val}`}>{value}</p>
                       <p className="text-[10px] text-slate-400 mt-0.5">{label}</p>
+                      {note && <p className="text-[9px] font-bold text-violet-500 mt-0.5">✦ {note}</p>}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* ── REVENUE SECTION ── */}
+            {/* ── RENT SECTION ── */}
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Revenue</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Rent</p>
               <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-4 space-y-3">
-                {/* Revenue + Occupancy % */}
+                {/* Rent + Occupancy % */}
                 <div className="flex items-end justify-between">
                   <div>
-                    <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide mb-0.5">Monthly Revenue</p>
+                    <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide mb-0.5">Monthly Rent</p>
                     <p className="flex items-baseline gap-0.5 text-[22px] font-bold text-slate-800 leading-none">
                       <IndianRupee size={15} className="text-primary-500 mb-px" />
                       {(s.totalRevenue ?? 0).toLocaleString('en-IN')}
@@ -912,34 +918,47 @@ const PropertyDetailModal = ({
               </div>
             </div>
 
-            {/* ── EMPTY STATE ── */}
-            {isEmpty && (
+            {/* ── EMPTY STATE: no rooms/beds set up ── */}
+            {noBeds && (
               <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 px-5 py-5 flex flex-col items-center gap-3 text-center">
                 <div className="h-11 w-11 rounded-xl bg-slate-100 flex items-center justify-center shadow-sm">
                   <BedDouble size={20} className="text-slate-400" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-slate-600">No tenants yet</p>
+                  <p className="text-sm font-semibold text-slate-600">No rooms set up yet</p>
                   <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                    Set up rooms and assign beds to start tracking revenue
+                    Add rooms and beds first to start tracking occupancy and rent
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  {onAddRoom && (
-                    <button
-                      onClick={() => { onClose(); onAddRoom() }}
-                      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-primary-50 text-primary-600 hover:bg-primary-100 border border-primary-200 transition-colors">
-                      <Plus size={12} /> Add Room
-                    </button>
-                  )}
-                  {onAddTenant && (
-                    <button
-                      onClick={() => { onClose(); onAddTenant() }}
-                      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200 transition-colors">
-                      <Users size={12} /> Add Tenant
-                    </button>
-                  )}
+                {onAddRoom && (
+                  <button
+                    onClick={() => { onClose(); onAddRoom() }}
+                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-primary-50 text-primary-600 hover:bg-primary-100 border border-primary-200 transition-colors">
+                    <Plus size={12} /> Add Room
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* ── EMPTY STATE: beds exist but no tenants ── */}
+            {noTenants && (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 px-5 py-5 flex flex-col items-center gap-3 text-center">
+                <div className="h-11 w-11 rounded-xl bg-slate-100 flex items-center justify-center shadow-sm">
+                  <Users size={20} className="text-slate-400" />
                 </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-600">No tenants yet</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                    Rooms are ready — assign tenants to start tracking rent
+                  </p>
+                </div>
+                {onAddTenant && (
+                  <button
+                    onClick={() => { onClose(); onAddTenant() }}
+                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-primary-50 text-primary-600 hover:bg-primary-100 border border-primary-200 transition-colors">
+                    <Users size={12} /> Add Tenant
+                  </button>
+                )}
               </div>
             )}
           </>
@@ -955,7 +974,7 @@ const PropertyDetailModal = ({
               <button
                 onClick={() => { onClose(); onEdit(p) }}
                 className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold text-white transition-all shadow-sm
-                  bg-gradient-to-r ${accent.from} ${accent.to} hover:opacity-90 active:scale-[.98]`}>
+                  bg-gradient-to-r from-primary-500 to-primary-700 hover:opacity-90 active:scale-[.98]`}>
                 <Pencil size={14} /> Edit Property
               </button>
 
@@ -1013,8 +1032,8 @@ const Properties = () => {
   const { refreshProperties, setSelectedProperty } = useProperty()
   const toast = useToast()
 
-  const { data, loading, refetch }              = useApi(getAllProperties)
-  const { data: sData, refetch: refetchStats }  = useApi(getAllPropertyStats)
+  const { data, loading, refetch }                          = useApi(getAllProperties)
+  const { data: sData, loading: statsLoading, refetch: refetchStats } = useApi(getAllPropertyStats)
 
   const statsMap = sData?.data ?? {}
 
@@ -1044,8 +1063,9 @@ const Properties = () => {
   const activeStats = properties.filter((p) => p.isActive).map((p) => statsMap[p._id]).filter(Boolean)
   const portfolioRevenue  = activeStats.reduce((s, x) => s + (x.totalRevenue  ?? 0), 0)
   const portfolioTenants  = activeStats.reduce((s, x) => s + (x.activeTenants ?? 0), 0)
-  const portfolioTotalBeds = activeStats.reduce((s, x) => s + (x.totalBeds    ?? 0), 0)
-  const portfolioOccupied = activeStats.reduce((s, x) => s + (x.occupiedBeds  ?? 0), 0)
+  const portfolioTotalBeds  = activeStats.reduce((s, x) => s + (x.totalBeds   ?? 0), 0)
+  const portfolioExtraBeds  = activeStats.reduce((s, x) => s + (x.extraBeds   ?? 0), 0)
+  const portfolioOccupied   = activeStats.reduce((s, x) => s + (x.occupiedBeds ?? 0), 0)
   const portfolioOccPct   = portfolioTotalBeds > 0
     ? Math.round((portfolioOccupied / portfolioTotalBeds) * 100)
     : 0
@@ -1152,22 +1172,39 @@ const Properties = () => {
             {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ''}
           </p>
         </div>
-        <button className="btn-primary shrink-0" onClick={() => setModal('add')}>
+        <button
+          className="btn-primary shrink-0"
+          onClick={() => setModal('add')}
+          data-testid="add-property-btn"
+        >
           <Plus size={16} /> Add Property
         </button>
       </div>
 
       {/* ── Portfolio KPI Bar ── */}
       {!loading && activeCount > 0 && (
+        statsLoading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[0,1,2,3].map(i => (
+              <div key={i} className="rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300">
+                <div className="h-9 w-9 rounded-xl bg-slate-100 animate-pulse shrink-0" />
+                <div className="space-y-2 flex-1">
+                  <div className="h-4 w-16 rounded bg-slate-100 animate-pulse" />
+                  <div className="h-3 w-20 rounded bg-slate-100 animate-pulse" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: 'Total Revenue', value: fmt(portfolioRevenue), sub: '/mo', icon: IndianRupee, accent: 'text-primary-600', bg: 'bg-primary-50 border-primary-100' },
+            { label: 'Monthly Rent', value: fmt(portfolioRevenue), sub: '/mo', icon: IndianRupee, accent: 'text-primary-600', bg: 'bg-primary-50 border-primary-100' },
             { label: 'Occupancy', value: `${portfolioOccPct}%`, icon: TrendingUp, accent: portfolioOccPct >= 80 ? 'text-emerald-600' : portfolioOccPct >= 50 ? 'text-amber-600' : 'text-slate-500', bg: 'bg-slate-50 border-slate-200' },
             { label: 'Active Tenants', value: portfolioTenants, icon: Users, accent: 'text-violet-600', bg: 'bg-violet-50 border-violet-100' },
-            { label: 'Beds Occupied', value: `${portfolioOccupied}/${portfolioTotalBeds}`, icon: BedDouble, accent: 'text-blue-600', bg: 'bg-blue-50 border-blue-100' },
-          ].map(({ label, value, sub, icon: Icon, accent, bg }) => (
-            <div key={label} className="rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm">
-              <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${bg}`}>
+            { label: 'Beds Occupied', value: `${portfolioOccupied}/${portfolioTotalBeds}`, note: portfolioExtraBeds > 0 ? `+${portfolioExtraBeds} extra` : null, icon: BedDouble, accent: 'text-blue-600', bg: 'bg-blue-50 border-blue-100' },
+          ].map(({ label, value, sub, note, icon: Icon, accent, bg }) => (
+            <div key={label} className="rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 active:scale-[0.98] cursor-default">
+              <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 transition-transform duration-200 group-hover:scale-110 ${bg}`}>
                 <Icon size={15} className={accent} />
               </div>
               <div className="min-w-0">
@@ -1176,10 +1213,12 @@ const Properties = () => {
                   {sub && <span className="text-[11px] font-normal text-slate-400 ml-0.5">{sub}</span>}
                 </p>
                 <p className="text-[10px] text-slate-400 mt-0.5 font-medium">{label}</p>
+                {note && <p className="text-[9px] font-bold text-violet-500 mt-0.5">✦ {note}</p>}
               </div>
             </div>
           ))}
         </div>
+        )
       )}
 
       {/* ── Search + Filters ── */}
@@ -1189,6 +1228,7 @@ const Properties = () => {
           <div className="relative flex-1 min-w-[180px]">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
+              data-testid="properties-search"
               className="input pl-8 py-1.5 text-sm w-full"
               placeholder="Search by name or city…"
               value={search}
@@ -1200,6 +1240,7 @@ const Properties = () => {
           <div className="flex items-center gap-0.5 rounded-xl p-1 text-xs bg-slate-50 border border-slate-200 shrink-0">
             {[['active', 'Active'], ['inactive', 'Inactive'], ['all', 'All']].map(([v, l]) => (
               <button key={v} onClick={() => setFilterStatus(v)}
+                data-testid={`filter-${v}`}
                 className={`rounded-lg px-2.5 py-1.5 font-medium transition-colors ${
                   filterStatus === v
                     ? 'bg-white text-primary-600 shadow-sm border border-slate-200'
@@ -1228,20 +1269,71 @@ const Properties = () => {
           {[0, 1, 2].map((i) => <PropertyCardSkeleton key={i} />)}
         </div>
       ) : properties.length === 0 ? (
-        <div className="card py-16">
-          <div className="flex flex-col items-center text-center gap-4 max-w-sm mx-auto">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary-50 border border-primary-100">
-              <Sparkles size={28} className="text-primary-500" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-slate-800 mb-1">Add your first property</h3>
-              <p className="text-sm text-slate-500">
-                Start by adding your first PG to manage rooms, tenants &amp; rent — all in one place.
+        <div className="flex items-center justify-center py-10">
+          <div className="w-full max-w-2xl">
+
+            {/* Hero */}
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center h-20 w-20 rounded-3xl mb-5 mx-auto"
+                style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
+                <Building2 size={36} style={{ color: '#60C3AD' }} />
+              </div>
+              <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Add your first property</h2>
+              <p className="text-sm text-slate-400 mt-2 max-w-sm mx-auto leading-relaxed">
+                Set up your PG / Hostel in minutes — add rooms, assign tenants, and start tracking rent all in one place.
               </p>
+              <button
+                className="mt-5 inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 shadow-sm"
+                style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}
+                onClick={() => setModal('add')}
+                data-testid="add-property-empty-state-btn"
+              >
+                <Plus size={16} /> Add Property
+              </button>
             </div>
-            <button className="btn-primary" onClick={() => setModal('add')}>
-              <Plus size={16} /> Add Property
-            </button>
+
+            {/* Feature cards */}
+            <div className="grid grid-cols-3 gap-3 mb-6">
+              {[
+                { icon: BedDouble,    label: 'Rooms & Beds',   desc: 'Manage rooms, beds, and live occupancy at a glance'   },
+                { icon: Users,        label: 'Tenants',         desc: 'Track tenants, lease history, and contact details'    },
+                { icon: IndianRupee,  label: 'Rent & Ledger',   desc: 'Collect rent, log charges, and view full audit trail' },
+              ].map(({ icon: Icon, label, desc }) => (
+                <div key={label} className="rounded-xl border border-slate-100 bg-white px-4 py-4 text-center">
+                  <div className="inline-flex items-center justify-center h-9 w-9 rounded-xl mb-3"
+                    style={{ background: 'rgba(96,195,173,0.10)', color: '#60C3AD' }}>
+                    <Icon size={17} />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700 mb-1">{label}</p>
+                  <p className="text-[11px] text-slate-400 leading-snug">{desc}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Quick-start steps */}
+            <div className="rounded-2xl border border-slate-100 bg-white overflow-hidden">
+              <p className="px-5 py-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400 border-b border-slate-100">
+                Quick start — 4 steps
+              </p>
+              {[
+                { num: '1', label: 'Add this property',  desc: 'Click "Add Property" above and fill in the details' },
+                { num: '2', label: 'Create rooms',        desc: 'Go to Rooms & Beds and define your room layout'     },
+                { num: '3', label: 'Add beds per room',   desc: 'Set capacity, amenities, and bed-level rent'        },
+                { num: '4', label: 'Assign first tenant', desc: 'Pick a bed, set rent, and move your tenant in'      },
+              ].map(({ num, label, desc }, i, arr) => (
+                <div key={num} className={`flex items-center gap-4 px-5 py-3.5 ${i < arr.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                  <div className="shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                    style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}>
+                    {num}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-slate-700">{label}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
           </div>
         </div>
       ) : filtered.length === 0 ? (
@@ -1303,7 +1395,7 @@ const Properties = () => {
             onCancel={closeModal}
             isAdd={modal === 'add'}
             onDirtyChange={setFormDirty}
-            onDelete={modal !== 'add' ? () => { closeModal(); handleDelete(modal._id) } : undefined}
+            onDelete={modal !== 'add' ? () => { setModal(null); setFormDirty(false); handleDelete(modal._id) } : undefined}
           />
         </Modal>
       )}

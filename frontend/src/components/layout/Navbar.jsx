@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
-import { MapPin, LayoutGrid, Menu, Settings, ChevronRight } from 'lucide-react'
+import { MapPin, Menu, Settings, ChevronRight } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useProperty } from '../../context/PropertyContext'
 import { useNavigate } from 'react-router-dom'
 
 const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
-  const { user }                               = useAuth()
-  const { selectedProperty, isAllProperties }  = useProperty()
-  const navigate                               = useNavigate()
+  const { user }             = useAuth()
+  const { selectedProperty } = useProperty()
+  const navigate             = useNavigate()
 
   const [showUserMenu, setShowUserMenu] = useState(false)
   const menuRef = useRef(null)
@@ -48,14 +48,11 @@ const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
       </div>
 
       {/* Centre: active property pill */}
-      {(selectedProperty || isAllProperties) && (
+      {selectedProperty && (
         <div className="absolute left-1/2 -translate-x-1/2 hidden sm:flex items-center gap-1.5 rounded-full px-3.5 py-1.5 bg-primary-50 border border-primary-100">
-          {isAllProperties
-            ? <LayoutGrid size={12} className="text-primary-500 shrink-0" />
-            : <MapPin      size={12} className="text-primary-500 shrink-0" />
-          }
+          <MapPin size={12} className="text-primary-500 shrink-0" />
           <span className="text-xs font-semibold text-primary-600 max-w-[160px] truncate">
-            {isAllProperties ? 'All Properties' : selectedProperty.name}
+            {selectedProperty.name}
           </span>
         </div>
       )}

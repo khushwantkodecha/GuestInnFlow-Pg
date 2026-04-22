@@ -3,12 +3,13 @@ import {
   IndianRupee, Calendar, BedDouble, AlertTriangle, CheckCircle2,
   Clock, MessageCircle, X, ChevronRight, Wallet, CreditCard,
   TrendingUp, Users, RefreshCw, Search, ArrowDownLeft, ArrowUpLeft,
-  Zap, Check, Phone, CalendarClock, Ban,
+  Check, Phone, CalendarClock, Ban, Zap, Shield, ChevronDown,
 } from 'lucide-react'
-import { getTenants, getTenantRents } from '../api/tenants'
-import { getTenantLedger, recordPayment, sendRentReminder } from '../api/rent'
+import { getTenants, getTenantRents, adjustDeposit } from '../api/tenants'
+import { getTenantLedger, recordPayment, addCharge } from '../api/rent'
 import { useProperty } from '../context/PropertyContext'
 import { useToast } from '../context/ToastContext'
+import { loadEnabledMethods } from '../utils/paymentMethods'
 import Spinner from '../components/ui/Spinner'
 import EmptyState from '../components/ui/EmptyState'
 
@@ -280,7 +281,6 @@ const REASON_LABELS = {
   change_room:      'Room transfer',
   extra_bed_change: 'Extra bed change',
   base_rent_update: 'Base rent updated',
-  rent_type_update: 'Rent type changed',
 }
 
 const RentChangeItem = ({ event: e }) => {
@@ -389,7 +389,7 @@ const TransactionItem = ({ entry: e }) => {
 }
 
 // ── CollectPaymentModal ───────────────────────────────────────────────────────
-const METHODS = [
+const ALL_METHODS = [
   { id: 'cash',          label: 'Cash' },
   { id: 'upi',           label: 'UPI' },
   { id: 'bank_transfer', label: 'Bank' },
@@ -397,13 +397,16 @@ const METHODS = [
 ]
 
 const CollectPaymentModal = ({ tenant, propertyId, suggestedAmount, onClose, onSuccess }) => {
+  const enabledIds = loadEnabledMethods(propertyId)
+  const methods    = ALL_METHODS.filter(m => enabledIds.includes(m.id))
+  const toast      = useToast()
+
   const [amount, setAmount]   = useState(String(suggestedAmount || ''))
-  const [method, setMethod]   = useState('cash')
+  const [method, setMethod]   = useState(methods[0]?.id ?? 'cash')
   const [ref,    setRef]      = useState('')
   const [notes,  setNotes]    = useState('')
   const [saving, setSaving]   = useState(false)
   const [error,  setError]    = useState('')
-  const { addToast } = useToast()
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -419,7 +422,7 @@ const CollectPaymentModal = ({ tenant, propertyId, suggestedAmount, onClose, onS
         referenceId: ref  || undefined,
         notes:       notes || undefined,
       })
-      addToast('Payment recorded successfully', 'success')
+      toast('Payment recorded successfully', 'success')
       onSuccess()
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to record payment')
@@ -465,7 +468,7 @@ const CollectPaymentModal = ({ tenant, propertyId, suggestedAmount, onClose, onS
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Method</label>
             <div className="grid grid-cols-4 gap-1.5">
-              {METHODS.map(m => (
+              {methods.map(m => (
                 <button key={m.id} type="button" onClick={() => setMethod(m.id)}
                   className={`py-2 rounded-xl text-xs font-semibold transition-all ${
                     method === m.id
@@ -790,22 +793,159 @@ const TenantBillingCard = ({ tenant, selected, onClick }) => {
   )
 }
 
+// ── Shared constants for the redesigned ledger ────────────────────────────────
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const LEDGER_HIDE  = new Set(['deposit_adjusted', 'deposit_collected'])
+const LEDGER_TYPE_BADGE = {
+  rent_generated:   { label: 'RENT',     cls: 'bg-slate-100 text-slate-600 border-slate-200'   },
+  rent_record:      { label: 'RENT',     cls: 'bg-slate-100 text-slate-600 border-slate-200'   },
+  payment_received: { label: 'PAYMENT',  cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+  payment:          { label: 'PAYMENT',  cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+  adjustment:       { label: 'CHARGE',   cls: 'bg-amber-100 text-amber-700 border-amber-200'   },
+  deposit_refunded: { label: 'REFUND',   cls: 'bg-red-100 text-red-600 border-red-200'         },
+  refund:           { label: 'REFUND',   cls: 'bg-red-100 text-red-600 border-red-200'         },
+}
+
+// ── AddChargeModal ─────────────────────────────────────────────────────────────
+const AddChargeModal = ({ tenant, propertyId, onClose, onSuccess }) => {
+  const [amount, setAmount] = useState('')
+  const [desc,   setDesc]   = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState('')
+  const toast = useToast()
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    const amt = Number(amount)
+    if (!amt || amt <= 0) { setError('Enter a valid amount'); return }
+    if (!desc.trim())     { setError('Enter a description'); return }
+    setSaving(true); setError('')
+    try {
+      await addCharge(propertyId, tenant._id, { amount: amt, description: desc.trim() })
+      toast('Charge added', 'success')
+      onSuccess()
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to add charge')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-4"
+      style={{ background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)' }}>
+      <div className="w-full max-w-sm rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <div>
+            <p className="text-sm font-bold text-slate-800">Add Charge</p>
+            <p className="text-xs text-slate-400 mt-0.5">{tenant.name}</p>
+          </div>
+          <button onClick={onClose} className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-200 transition-colors">
+            <X size={14} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Amount</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-sm">₹</span>
+              <input type="number" min="1" step="1" required autoFocus
+                className="input pl-7 text-lg font-bold tabular-nums w-full"
+                value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Description</label>
+            <input type="text" required className="input text-sm w-full"
+              placeholder="e.g. Electricity bill, Damage…"
+              value={desc} onChange={e => setDesc(e.target.value)} />
+          </div>
+          {error && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+            <button type="submit" disabled={saving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+              {saving && <RefreshCw size={13} className="animate-spin" />}
+              {saving ? 'Adding…' : 'Add Charge'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ── UseDepositModal ────────────────────────────────────────────────────────────
+const UseDepositModal = ({ tenant, propertyId, balance, onClose, onSuccess }) => {
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState('')
+  const toast        = useToast()
+  const depAvailable = tenant.depositBalance ?? tenant.depositAmount ?? 0
+  const applyAmt     = Math.min(depAvailable, balance)
+
+  const handleConfirm = async () => {
+    setSaving(true); setError('')
+    try {
+      await adjustDeposit(propertyId, tenant._id, applyAmt < depAvailable ? { amount: applyAmt } : {})
+      toast(`₹${applyAmt.toLocaleString('en-IN')} deposit applied to dues`, 'success')
+      onSuccess()
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to apply deposit')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-4"
+      style={{ background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)' }}>
+      <div className="w-full max-w-sm rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-violet-50">
+          <p className="text-sm font-bold text-violet-800">Use Security Deposit</p>
+          <button onClick={onClose} className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-200 transition-colors">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="px-5 py-4 space-y-3">
+          <div className="rounded-xl bg-slate-50 border border-slate-100 divide-y divide-slate-100">
+            <div className="flex items-center justify-between px-4 py-2.5">
+              <span className="text-xs text-slate-500">Available deposit</span>
+              <span className="text-sm font-bold tabular-nums text-emerald-600">{fmt(depAvailable)}</span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-2.5">
+              <span className="text-xs text-slate-500">Current dues</span>
+              <span className="text-sm font-bold tabular-nums text-red-600">{fmt(balance)}</span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-2.5 bg-violet-50/50">
+              <span className="text-xs font-semibold text-violet-700">Will apply</span>
+              <span className="text-sm font-bold tabular-nums text-violet-700">{fmt(applyAmt)}</span>
+            </div>
+          </div>
+          {error && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+            <button onClick={handleConfirm} disabled={saving}
+              className="flex-1 rounded-xl bg-violet-600 hover:bg-violet-700 text-white py-2.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+              {saving && <RefreshCw size={13} className="animate-spin" />}
+              {saving ? 'Applying…' : 'Apply Deposit'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── BillingDetail ─────────────────────────────────────────────────────────────
 const BillingDetail = ({ tenant, propertyId, onClose }) => {
-  const { addToast } = useToast()
-
   // Data
   const [rents,         setRents]         = useState([])
-  const [rentChanges,   setRentChanges]   = useState([])
   const [ledger,        setLedger]        = useState([])
   const [ledgerBalance, setLedgerBalance] = useState(tenant.ledgerBalance ?? 0)
   const [loading,       setLoading]       = useState(true)
-  const [payModal,      setPayModal]      = useState(false)
-  const [reminding,     setReminding]     = useState(false)
   const [ledgerPage,    setLedgerPage]    = useState(1)
   const [ledgerTotal,   setLedgerTotal]   = useState(0)
-  const LIMIT = 20
-
+  const [activeTab,     setActiveTab]     = useState('timeline')
+  const [sortDesc,      setSortDesc]      = useState(true)
+  const [payModal,      setPayModal]      = useState(false)
+  const [chargeModal,   setChargeModal]   = useState(false)
+  const [depositModal,  setDepositModal]  = useState(false)
+  const LIMIT = 30
   const loadData = useCallback(async (page = 1) => {
     setLoading(page === 1)
     try {
@@ -814,7 +954,6 @@ const BillingDetail = ({ tenant, propertyId, onClose }) => {
         getTenantLedger(propertyId, tenant._id, { page, limit: LIMIT }),
       ])
       setRents(rentsRes.data?.data ?? [])
-      setRentChanges(rentsRes.data?.rentChanges ?? [])
       const ld = ledgerRes.data?.data ?? {}
       setLedger(prev => page === 1 ? (ld.entries ?? []) : [...prev, ...(ld.entries ?? [])])
       setLedgerBalance(ld.currentBalance ?? 0)
@@ -822,260 +961,361 @@ const BillingDetail = ({ tenant, propertyId, onClose }) => {
       setLedgerPage(page)
     } catch (_) {}
     finally { setLoading(false) }
-  }, [propertyId, tenant._id])
+  }, [propertyId, tenant._id]) // eslint-disable-line
 
   useEffect(() => { loadData(1) }, [loadData])
 
-  // Derived values
-  const cycle = useMemo(() => computeCycle(tenant), [tenant])
-
-  const currentRecord = useMemo(() => {
-    if (!cycle) return null
-    const cm = cycle.cycleStart.getMonth() + 1
-    const cy = cycle.cycleStart.getFullYear()
-    return rents.find(r => r.month === cm && r.year === cy) ?? null
-  }, [cycle, rents])
-
-  const openRecords = useMemo(() =>
-    rents.filter(r => ['pending', 'partial', 'overdue'].includes(r.status)),
-  [rents])
-
-  const totalOutstanding = openRecords.reduce((s, r) => s + (r.amount - (r.paidAmount ?? 0)), 0)
-  const bed = tenant.bed
-  const roomNum = bed?.room?.roomNumber ?? bed?.room ?? null
-  const bedNum  = bed?.bedNumber ?? null
-
-  const handlePaymentSuccess = () => {
-    setPayModal(false)
+  const handleSuccess = () => {
+    setPayModal(false); setChargeModal(false); setDepositModal(false)
     loadData(1)
   }
 
-  const handleRemind = async () => {
-    if (reminding) return
-    setReminding(true)
-    try {
-      await sendRentReminder(propertyId, tenant._id)
-      addToast('Reminder sent via WhatsApp', 'success')
-    } catch (_) {
-      addToast('Failed to send reminder', 'error')
-    } finally { setReminding(false) }
-  }
+  // Derived ledger stats
+  const stats = useMemo(() => {
+    const billed  = ledger.filter(e => ['rent_generated','rent_record','adjustment'].includes(e.referenceType))
+                          .reduce((s, e) => s + (e.amount ?? 0), 0)
+    const cashPaid = ledger.filter(e => ['payment_received','payment'].includes(e.referenceType) && e.method !== 'deposit_adjustment')
+                           .reduce((s, e) => s + (e.amount ?? 0), 0)
+    const depUsed  = ledger.filter(e => ['payment_received','payment'].includes(e.referenceType) && e.method === 'deposit_adjustment')
+                           .reduce((s, e) => s + (e.amount ?? 0), 0)
+    return { billed, cashPaid, depUsed }
+  }, [ledger])
 
-  const suggestedAmt = Math.max(0, ledgerBalance)
+  const depAvailable  = tenant.depositBalance ?? tenant.depositAmount ?? 0
+  const canUseDeposit = tenant.depositPaid && depAvailable > 0 && ledgerBalance > 0
+                     && tenant.depositStatus !== 'adjusted' && tenant.depositStatus !== 'refunded'
+
+  // Map rent {month-year} → list of payments that allocated to that cycle
+  const rentPaymentMap = useMemo(() => {
+    const map = {}
+    ledger.forEach(e => {
+      if (!['payment_received','payment'].includes(e.referenceType)) return
+      const alloc = e.allocation
+      if (!alloc?.appliedTo?.length) return
+      alloc.appliedTo.forEach(a => {
+        const key = `${a.month}-${a.year}`
+        if (!map[key]) map[key] = []
+        const methodLabel = e.method === 'deposit_adjustment' ? 'Deposit'
+          : e.method === 'bank_transfer' ? 'Bank Transfer'
+          : e.method === 'upi' ? 'UPI'
+          : e.method === 'cash' ? 'Cash'
+          : e.method ? e.method.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())
+          : 'Payment'
+        map[key].push({ method: methodLabel, amount: a.amount ?? 0, date: e.createdAt })
+      })
+    })
+    return map
+  }, [ledger])
+
+  const timelineEntries = useMemo(() => {
+    const visible = ledger.filter(e => !LEDGER_HIDE.has(e.referenceType))
+    return [...visible].sort((a, b) => sortDesc
+      ? new Date(b.createdAt) - new Date(a.createdAt)
+      : new Date(a.createdAt) - new Date(b.createdAt))
+  }, [ledger, sortDesc])
+
+  const balLabel = ledgerBalance > 0 ? `Balance: ₹${ledgerBalance.toLocaleString('en-IN')} Due`
+    : ledgerBalance < 0 ? `Balance: ₹${Math.abs(ledgerBalance).toLocaleString('en-IN')} Advance`
+    : 'Balance: Settled'
+  const balBadgeCls = ledgerBalance > 0 ? 'text-red-600 bg-red-50 border-red-200'
+    : ledgerBalance < 0 ? 'text-blue-700 bg-blue-50 border-blue-200'
+    : 'text-emerald-600 bg-emerald-50 border-emerald-200'
 
   return (
     <div className="flex flex-col h-full bg-white">
 
-      {/* ── Sticky Header ── */}
-      <div className="shrink-0 bg-white border-b border-slate-100 px-5 py-4">
+      {/* ── Header: Name + Phone + Balance ── */}
+      <div className="shrink-0 bg-white border-b border-slate-100 px-5 py-3.5">
         <div className="flex items-center gap-3">
-          <div className={`h-10 w-10 rounded-xl flex items-center justify-center text-sm font-bold shrink-0 ${avatarColor(tenant.name)}`}>
+          <div className={`h-9 w-9 rounded-xl flex items-center justify-center text-xs font-bold shrink-0 ${avatarColor(tenant.name)}`}>
             {initials(tenant.name)}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-base font-bold text-slate-800 leading-tight">{tenant.name}</h3>
-              <span className={`text-[9px] font-bold border rounded-full px-1.5 py-0.5 ${
-                tenant.status === 'active' ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                : tenant.status === 'notice' ? 'text-amber-700 bg-amber-50 border-amber-200'
-                : 'text-slate-500 bg-slate-50 border-slate-200'
-              }`}>
-                {tenant.status?.toUpperCase()}
-              </span>
+              <h3 className="text-sm font-bold text-slate-800 leading-tight">{tenant.name}</h3>
+              {tenant.phone && (
+                <span className="text-[10px] text-slate-400 font-medium flex items-center gap-0.5">
+                  <Phone size={9} /> {tenant.phone}
+                </span>
+              )}
             </div>
-            {(roomNum || bedNum) && (
-              <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">
-                <BedDouble size={10} className="shrink-0" />
-                {roomNum ? `Room ${roomNum}` : ''}{bedNum ? ` · Bed ${bedNum}` : ''}
-              </p>
-            )}
+            <span className={`inline-flex items-center mt-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${balBadgeCls}`}>
+              {ledgerBalance === 0 ? '✓ Balance: Settled' : balLabel}
+            </span>
           </div>
           <button onClick={onClose}
-            className="h-8 w-8 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors shrink-0">
+            className="h-8 w-8 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-100 transition-colors shrink-0">
             <X size={16} />
           </button>
         </div>
       </div>
 
-      {/* ── Scrollable Body ── */}
-      <div className="flex-1 overflow-y-auto pb-24">
+      {/* ── Compact Summary ── */}
+      {(() => {
+        const pending = Math.max(0, stats.billed - stats.cashPaid - stats.depUsed)
+        return (
+          <div className="shrink-0 flex items-center gap-2 flex-wrap px-4 py-2 border-b border-slate-100 bg-slate-50/80">
+            <span className="text-[11px] font-semibold text-slate-600 tabular-nums">{fmt(stats.billed)} billed</span>
+            <span className="text-[10px] text-slate-300">•</span>
+            <span className="text-[11px] font-semibold text-emerald-600 tabular-nums">{fmt(stats.cashPaid + stats.depUsed)} paid</span>
+            <span className="text-[10px] text-slate-300">•</span>
+            <span className={`text-[11px] font-bold tabular-nums ${pending > 0 ? 'text-red-600' : 'text-slate-400'}`}>
+              {pending > 0 ? `${fmt(pending)} pending` : 'settled ✓'}
+            </span>
+          </div>
+        )
+      })()}
+
+      {/* ── Action Bar ── */}
+      <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 border-b border-slate-100">
+        <button onClick={() => setPayModal(true)}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-primary-600 hover:bg-primary-700 text-white py-2 text-xs font-bold transition-colors">
+          <IndianRupee size={12} /> Record Payment
+        </button>
+        <button onClick={() => setChargeModal(true)}
+          className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors">
+          <Zap size={12} /> Add Charge
+        </button>
+        {canUseDeposit && (
+          <button onClick={() => setDepositModal(true)}
+            className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 hover:bg-violet-100 px-3 py-2 text-xs font-semibold text-violet-700 transition-colors">
+            <Shield size={12} /> Use Deposit
+          </button>
+        )}
+      </div>
+
+      {/* ── Tabs + Sort ── */}
+      <div className="shrink-0 flex items-center border-b border-slate-100 bg-white">
+        {[
+          { id: 'timeline', label: 'Timeline' },
+          { id: 'rents',    label: 'Rent Records' },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2.5 text-[11px] font-bold transition-colors border-b-2 ${
+              activeTab === tab.id
+                ? 'border-primary-500 text-primary-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}>
+            {tab.label}
+          </button>
+        ))}
+        <div className="ml-auto px-3 flex items-center gap-2">
+          {ledgerTotal > 0 && (
+            <span className="text-[9px] text-slate-400">{ledgerTotal} entries</span>
+          )}
+          <button onClick={() => setSortDesc(d => !d)}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2 py-1 text-[9px] font-semibold text-slate-500 transition-colors whitespace-nowrap">
+            {sortDesc ? 'Newest first' : 'Oldest first'}
+            <ChevronDown size={9} className={`transition-transform duration-150 ${sortDesc ? 'rotate-180' : ''}`} />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Body ── */}
+      <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center py-16"><Spinner /></div>
-        ) : (
-          <div className="px-5 py-5 space-y-5">
+        ) : activeTab === 'timeline' ? (
 
-            {/* ── 1. Financial Snapshot ── */}
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                {
-                  label: 'Monthly Rent',
-                  value: fmt(tenant.rentAmount),
-                  color: 'text-slate-700',
-                  sub: 'per billing cycle',
-                },
-                {
-                  label: ledgerBalance > 0 ? 'Outstanding' : ledgerBalance < 0 ? 'Advance Credit' : 'Balance',
-                  value: fmt(Math.abs(ledgerBalance)),
-                  color: ledgerBalance > 0 ? 'text-red-600' : ledgerBalance < 0 ? 'text-emerald-600' : 'text-slate-400',
-                  sub: ledgerBalance > 0
-                    ? openRecords.length > 1 ? `${openRecords.length} open cycles` : 'current balance'
-                    : ledgerBalance < 0 ? 'will apply to next bill' : 'fully settled',
-                },
-                {
-                  label: 'Due Date',
-                  value: cycle ? fdate(cycle.dueDate) : '—',
-                  color: cycle && new Date() > cycle.dueDate && ledgerBalance > 0 ? 'text-red-600' : 'text-slate-700',
-                  sub: cycle ? `${tenant.dueDate ?? 5} grace days` : 'no cycle',
-                },
-                {
-                  label: 'Check-in',
-                  value: fdate(tenant.checkInDate),
-                  color: 'text-slate-700',
-                  sub: cycle ? `Billing day: ${cycle.cycleStart.getDate()}` : 'no billing',
-                },
-              ].map(({ label, value, color, sub }) => (
-                <div key={label} className="rounded-2xl bg-slate-50 border border-slate-100 px-4 py-3">
-                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</p>
-                  <p className={`text-base font-bold tabular-nums mt-0.5 ${color}`}>{value}</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">{sub}</p>
-                </div>
-              ))}
+          /* ── Timeline Tab ── */
+          timelineEntries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+              <Wallet size={28} className="text-slate-200 mb-2" />
+              <p className="text-sm font-medium text-slate-400">No transactions yet</p>
+              <p className="text-xs text-slate-300 mt-1">Transactions appear once rent is generated or payment is recorded</p>
             </div>
-
-            {/* ── 2. Billing Cycle Timeline ── */}
-            {cycle && (
-              <div className="rounded-2xl bg-white border border-slate-200 px-5 py-4">
-                <BillingCycleBar cycleStart={cycle.cycleStart} cycleEnd={cycle.cycleEnd} />
-              </div>
-            )}
-
-            {/* ── 3. Due Status Banner ── */}
-            <DueStatusBanner
-              cycle={cycle}
-              ledgerBalance={ledgerBalance}
-              openRecords={openRecords}
-            />
-
-            {/* ── 4. Multiple Cycles Warning ── */}
-            {openRecords.length > 1 && (
-              <div className="rounded-2xl bg-orange-50 border border-orange-200 px-4 py-3.5">
-                <div className="flex items-center gap-3">
-                  <AlertTriangle size={16} className="text-orange-600 shrink-0" />
-                  <div>
-                    <p className="text-sm font-bold text-orange-700">
-                      Total Outstanding: {fmt(totalOutstanding)}
-                    </p>
-                    <p className="text-xs text-orange-600 mt-0.5">
-                      {openRecords.length} billing cycles unpaid
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3 space-y-1.5">
-                  {openRecords.map(r => (
-                    <div key={r._id} className="flex items-center justify-between text-xs">
-                      <span className="text-orange-700 font-medium">
-                        {r.periodStart ? `${fdate(r.periodStart)} – ${fdate(r.periodEnd)}` : `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][r.month - 1]} ${r.year}`}
-                      </span>
-                      <span className="font-bold text-orange-800 tabular-nums">
-                        {fmt(r.amount - (r.paidAmount ?? 0))}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ── 5. Payment Progress (current cycle) ── */}
-            {currentRecord && <PaymentProgress record={currentRecord} />}
-
-            {/* ── 6. Hint text ── */}
-            {!cycle && (
-              <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3 text-center">
-                <p className="text-xs text-slate-400">
-                  Billing cycle starts from move-in date. No active cycle found.
-                </p>
-              </div>
-            )}
-
-            {/* ── 7. Transaction Timeline ── */}
+          ) : (
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Transaction History</p>
-                <p className="text-[10px] text-slate-400">{ledgerTotal + rentChanges.length} entries</p>
-              </div>
+              {(() => {
+                const rows = []
+                let lastDate = null
+                timelineEntries.forEach((e, idx) => {
+                  const dateKey   = new Date(e.createdAt).toDateString()
+                  const dateLabel = new Date(e.createdAt).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' })
+                  if (dateKey !== lastDate) {
+                    lastDate = dateKey
+                    rows.push(
+                      <div key={`d-${dateKey}-${idx}`} className="flex items-center gap-3 px-4 py-1.5 bg-slate-50/80 border-b border-slate-100 sticky top-0 z-10">
+                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 whitespace-nowrap">{dateLabel}</span>
+                        <div className="flex-1 h-px bg-slate-200" />
+                      </div>
+                    )
+                  }
 
-              {ledger.length === 0 && rentChanges.length === 0 ? (
-                <div className="rounded-2xl bg-slate-50 border border-slate-100 px-4 py-8 text-center">
-                  <Wallet size={28} className="mx-auto text-slate-300 mb-2" />
-                  <p className="text-sm font-medium text-slate-400">No payments recorded yet</p>
-                  <p className="text-xs text-slate-300 mt-1">Transactions will appear here once rent is generated</p>
-                </div>
-              ) : (() => {
-                // Merge ledger entries + rent change events, sort newest-first by date
-                const ledgerItems  = ledger.map(e  => ({ _type: 'tx',     date: new Date(e.createdAt),  data: e }))
-                const changeItems  = rentChanges.map(e => ({ _type: 'rc',  date: new Date(e.changedAt), data: e }))
-                const merged = [...ledgerItems, ...changeItems].sort((a, b) => b.date - a.date)
+                  const isDepAdj  = e.method === 'deposit_adjustment'
+                  const isDebit   = e.type === 'debit' || e.referenceType === 'deposit_refunded' || e.referenceType === 'refund'
+                  const amtCls    = isDepAdj ? 'text-violet-600' : isDebit ? 'text-red-600' : 'text-emerald-600'
+                  const amtSign   = isDebit ? '−' : '+'
+                  const badge     = isDepAdj
+                    ? { label: 'DEP·USED', cls: 'bg-violet-100 text-violet-700 border-violet-200' }
+                    : LEDGER_TYPE_BADGE[e.referenceType] ?? { label: e.referenceType?.replace(/_/g,' ').toUpperCase() ?? '—', cls: 'bg-slate-100 text-slate-600 border-slate-200' }
 
-                return (
-                  <div className="rounded-2xl bg-white border border-slate-200 px-4 divide-y divide-slate-50">
-                    {merged.map((item, idx) =>
-                      item._type === 'tx'
-                        ? <TransactionItem  key={item.data._id ?? idx} entry={item.data} />
-                        : <RentChangeItem   key={`rc-${item.data.traceId ?? idx}`} event={item.data} />
-                    )}
-                  </div>
-                )
+                  const alloc    = e.allocation
+                  const hasAlloc = alloc && (alloc.appliedTo?.length > 0 || alloc.chargeAllocations?.length > 0 || alloc.advanceApplied > 0)
+                  const bal      = e.balanceAfter ?? 0
+                  const balStr   = bal === 0 ? 'Settled'
+                    : bal < 0 ? `₹${Math.abs(bal).toLocaleString('en-IN')} credit`
+                    : `₹${bal.toLocaleString('en-IN')} remaining`
+                  const balCl    = bal > 0 ? 'text-red-500' : bal < 0 ? 'text-emerald-600' : 'text-slate-400'
+
+                  const borderAccent = isDepAdj ? 'border-l-2 border-l-violet-300'
+                    : isDebit ? 'border-l-2 border-l-red-300'
+                    : 'border-l-2 border-l-emerald-400'
+
+                  rows.push(
+                    <div key={e._id ?? idx} className={`pl-3 pr-4 py-3 border-b border-slate-100 hover:bg-slate-50/60 transition-colors ${borderAccent} ${isDepAdj ? 'bg-violet-50/10' : ''}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                            <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full border ${badge.cls}`}>{badge.label}</span>
+                            {e.method && !isDepAdj && (
+                              <span className="text-[9px] text-slate-400 capitalize">
+                                {e.method === 'bank_transfer' ? 'Bank Transfer' : e.method === 'upi' ? 'UPI' : e.method.replace(/_/g,' ')}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] font-semibold text-slate-700 leading-snug truncate">{e.description ?? '—'}</p>
+                          {/* Applied-to breakdown */}
+                          {hasAlloc && (
+                            <div className="mt-1.5 pl-2 border-l-2 border-slate-200 space-y-0.5">
+                              {alloc.appliedTo?.map((a, i) => (
+                                <p key={i} className="text-[9px] text-slate-500">
+                                  → Rent {MONTHS_SHORT[(a.month ?? 1) - 1]} {a.year}: ₹{(a.amount ?? 0).toLocaleString('en-IN')}
+                                </p>
+                              ))}
+                              {alloc.chargeAllocations?.map((c, i) => (
+                                <p key={i} className="text-[9px] text-amber-600">
+                                  → Charge ({c.chargeRecord?.description ?? 'Extra'}): ₹{(c.amount ?? 0).toLocaleString('en-IN')}
+                                </p>
+                              ))}
+                              {alloc.advanceApplied > 0 && (
+                                <p className="text-[9px] text-violet-500">
+                                  → +₹{alloc.advanceApplied.toLocaleString('en-IN')} to advance
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {/* Always-visible balance after */}
+                          <p className={`text-[10px] mt-1.5 tabular-nums font-semibold ${balCl}`}>Balance after: {balStr}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className={`text-sm font-bold tabular-nums ${amtCls}`}>
+                            {amtSign}₹{(e.amount ?? 0).toLocaleString('en-IN')}
+                          </p>
+                          <p className="text-[9px] text-slate-400 mt-0.5 tabular-nums">
+                            {new Date(e.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })
+                return rows
               })()}
 
               {/* Load more */}
               {ledger.length < ledgerTotal && (
-                <button
-                  onClick={() => loadData(ledgerPage + 1)}
-                  className="mt-3 w-full rounded-xl border border-slate-200 py-2.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors">
-                  Load more ({ledgerTotal - ledger.length} remaining)
-                </button>
+                <div className="px-4 py-3 text-center border-t border-slate-100">
+                  <button onClick={() => loadData(ledgerPage + 1)}
+                    className="text-[11px] font-semibold text-slate-500 hover:text-slate-700 transition-colors">
+                    Load {Math.min(LIMIT, ledgerTotal - ledger.length)} more
+                    <span className="text-slate-400 font-normal"> ({ledgerTotal - ledger.length} remaining)</span>
+                  </button>
+                </div>
               )}
             </div>
-          </div>
+          )
+
+        ) : (
+
+          /* ── Rent Records Tab ── */
+          rents.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+              <Calendar size={28} className="text-slate-200 mb-2" />
+              <p className="text-sm font-medium text-slate-400">No rent records</p>
+              <p className="text-xs text-slate-300 mt-1">Rent records appear once billing is generated</p>
+            </div>
+          ) : (
+            <div>
+              {[...rents].sort((a, b) => sortDesc
+                ? (b.year !== a.year ? b.year - a.year : b.month - a.month)
+                : (a.year !== b.year ? a.year - b.year : a.month - b.month)
+              ).map(r => {
+                const paid   = r.paidAmount ?? 0
+                const total  = r.amount ?? 0
+                const rem    = total - paid
+                const isPaid = r.status === 'paid'
+                const isPart = r.status === 'partial'
+                const statusCls = isPaid ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                  : isPart        ? 'bg-amber-100 text-amber-700 border-amber-200'
+                  :                 'bg-red-100 text-red-600 border-red-200'
+                const statusLabel = isPaid ? 'Paid' : isPart ? 'Partial' : 'Pending'
+                const monthLabel  = MONTHS_SHORT[(r.month ?? 1) - 1] + ' ' + r.year
+                const pct = total > 0 ? Math.min(100, (paid / total) * 100) : 0
+                const cyclePayments = rentPaymentMap[`${r.month}-${r.year}`] ?? []
+                const borderCls = isPaid ? 'border-l-2 border-l-emerald-400'
+                  : isPart ? 'border-l-2 border-l-amber-300'
+                  : 'border-l-2 border-l-red-300'
+                return (
+                  <div key={r._id} className={`pl-3 pr-4 py-3 border-b border-slate-100 hover:bg-slate-50/60 transition-colors ${borderCls}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-[11px] font-bold text-slate-700">{monthLabel}</span>
+                          <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full border ${statusCls}`}>{statusLabel}</span>
+                        </div>
+                        {r.periodStart && r.periodEnd && (
+                          <p className="text-[9px] text-slate-400">{fdate(r.periodStart)} – {fdate(r.periodEnd)}</p>
+                        )}
+                        {total > 0 && (
+                          <div className="mt-1.5 h-1 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${isPaid ? 'bg-emerald-500' : paid > 0 ? 'bg-amber-400' : 'bg-slate-200'}`}
+                              style={{ width: `${pct}%` }} />
+                          </div>
+                        )}
+                        {/* Per-cycle payment breakdown */}
+                        {cyclePayments.length > 0 && (
+                          <div className="mt-1.5 space-y-0.5">
+                            {cyclePayments.map((p, i) => (
+                              <p key={i} className="text-[9px] text-emerald-600 tabular-nums">
+                                {p.method} ₹{p.amount.toLocaleString('en-IN')}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                        {rem > 0 && (
+                          <p className="text-[9px] font-semibold text-red-500 mt-0.5 tabular-nums">{fmt(rem)} remaining</p>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(total)}</p>
+                        {paid > 0 && (
+                          <p className="text-[10px] text-emerald-600 tabular-nums mt-0.5">{fmt(paid)} paid</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )
         )}
       </div>
 
-      {/* ── Sticky Footer: Quick Actions ── */}
-      <div className="shrink-0 bg-white border-t border-slate-100 px-5 py-3">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setPayModal(true)}
-            className="flex-1 btn-primary flex items-center justify-center gap-2 py-2.5">
-            <IndianRupee size={14} />
-            Collect Payment
-          </button>
-          {tenant.phone && (
-            <>
-              <a href={waLink(tenant.phone)} target="_blank" rel="noreferrer"
-                className="h-10 w-10 rounded-xl border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors shrink-0"
-                title="WhatsApp">
-                <MessageCircle size={15} />
-              </a>
-              <button
-                onClick={handleRemind} disabled={reminding}
-                className="h-10 w-10 rounded-xl border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-200 transition-colors shrink-0"
-                title="Send reminder">
-                {reminding ? <RefreshCw size={13} className="animate-spin" /> : <Zap size={15} />}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* ── Collect Payment Modal ── */}
+      {/* ── Modals ── */}
       {payModal && (
-        <CollectPaymentModal
-          tenant={tenant}
-          propertyId={propertyId}
-          suggestedAmount={suggestedAmt}
-          onClose={() => setPayModal(false)}
-          onSuccess={handlePaymentSuccess}
-        />
+        <CollectPaymentModal tenant={tenant} propertyId={propertyId}
+          suggestedAmount={Math.max(0, ledgerBalance)}
+          onClose={() => setPayModal(false)} onSuccess={handleSuccess} />
+      )}
+      {chargeModal && (
+        <AddChargeModal tenant={tenant} propertyId={propertyId}
+          onClose={() => setChargeModal(false)} onSuccess={handleSuccess} />
+      )}
+      {depositModal && (
+        <UseDepositModal tenant={tenant} propertyId={propertyId}
+          balance={ledgerBalance}
+          onClose={() => setDepositModal(false)} onSuccess={handleSuccess} />
       )}
     </div>
   )

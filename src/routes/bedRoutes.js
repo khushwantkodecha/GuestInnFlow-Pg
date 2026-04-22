@@ -3,7 +3,7 @@ const {
   getBeds, getBed, createBed, createExtraBed, updateBed, deleteBed,
   assignBed, vacateCheck, vacateBed, reserveBed, cancelReservation, blockBed, unblockBed,
   changeBed, moveReservation, getRoomAnalytics, bulkBlockBeds, bulkUnblockBeds, bulkVacateBeds, rentPreview,
-  midStayDepositAdjust,
+  midStayDepositAdjust, updateExtraBedSettings,
 } = require('../controllers/bedController');
 const { protect } = require('../middleware/auth');
 const validate = require('../middleware/validate');
@@ -34,6 +34,7 @@ router.patch('/:id/reserve',   validate(reserveBedSchema), reserveBed);
 router.patch('/:id/unreserve', cancelReservation);
 router.patch('/:id/block',          blockBed);
 router.patch('/:id/unblock',        unblockBed);
-router.patch('/:id/deposit-adjust', midStayDepositAdjust);
+router.patch('/:id/deposit-adjust',   midStayDepositAdjust);
+router.patch('/:id/extra-settings',  updateExtraBedSettings);
 
 module.exports = router;

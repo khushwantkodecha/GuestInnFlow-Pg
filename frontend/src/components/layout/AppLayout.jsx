@@ -10,7 +10,7 @@ const TITLES = {
   '/properties': 'Properties',
   '/rooms':      'Rooms & Beds',
   '/tenants':    'Tenants',
-  '/rent':       'Rent Payments',
+  '/rent':       'Rent',
   '/expenses':   'Expenses',
   '/accounting': 'Accounting',
   '/reports':    'Reports',
@@ -19,7 +19,7 @@ const TITLES = {
 
 const AppLayout = () => {
   const { pathname } = useLocation()
-  const title        = TITLES[pathname] ?? 'GuestInnFlow'
+  const title        = TITLES[pathname] ?? 'TenantInnFlow'
 
   const [sidebarOpen,     setSidebarOpen]     = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)

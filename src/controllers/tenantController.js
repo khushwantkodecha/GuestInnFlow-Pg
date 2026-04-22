@@ -1,12 +1,15 @@
+const crypto       = require('crypto');
 const Tenant       = require('../models/Tenant');
 const Bed          = require('../models/Bed');
 const Room         = require('../models/Room');
 const Property     = require('../models/Property');
+const Invoice      = require('../models/Invoice');
 const LedgerEntry  = require('../models/LedgerEntry');
 const RentPayment  = require('../models/RentPayment');
 const rentService  = require('../services/rentService');
 const asyncHandler = require('../utils/asyncHandler');
 const { vacateBedCore, vacateTenantCore } = require('../services/vacateService');
+const { recalculateRoomRent } = require('../utils/recalculateRoomRent');
 
 // ── Shared phone-uniqueness check ────────────────────────────────────────────
 // Returns the conflicting tenant document if an active/notice tenant with the
@@ -91,7 +94,7 @@ const searchTenants = asyncHandler(async (req, res) => {
 
   const tenants = await Tenant.find(filter)
     .select('_id name phone status checkInDate checkOutDate bed rentAmount billingSnapshot')
-    .populate('bed', 'bedNumber room')
+    .populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } })
     .sort({ updatedAt: -1 })
     .limit(limit)
     .lean();
@@ -129,7 +132,7 @@ const getTenants = asyncHandler(async (req, res) => {
   }
 
   const tenants = await Tenant.find(filter)
-    .populate('bed', 'bedNumber room')
+    .populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } })
     .sort({ updatedAt: -1 });
   res.json({ success: true, count: tenants.length, data: tenants });
 });
@@ -141,7 +144,7 @@ const getTenant = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
 
-  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId }).populate('bed', 'bedNumber room');
+  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId }).populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } });
   if (!tenant) {
     return res.status(404).json({ success: false, message: 'Tenant not found' });
   }
@@ -177,7 +180,34 @@ const createTenant = asyncHandler(async (req, res) => {
     }
   }
 
+  // Normalise deposit status at creation based on depositPaid flag.
+  if (Number(tenantData.depositAmount) > 0) {
+    if (tenantData.depositPaid === true) {
+      // Collected at creation — mark as held and stamp the collection timestamp
+      tenantData.depositBalance = Number(tenantData.depositAmount);
+      tenantData.depositStatus  = 'held';
+      if (!tenantData.depositPaidAt) tenantData.depositPaidAt = new Date();
+    } else {
+      // Amount entered but not yet collected — mark as pending
+      tenantData.depositStatus = 'pending';
+    }
+  }
+
   const tenant = await Tenant.create({ ...tenantData, property: req.params.propertyId });
+
+  // Write audit ledger entry when deposit is collected at creation
+  if (tenantData.depositPaid === true && Number(tenantData.depositAmount) > 0) {
+    LedgerEntry.create({
+      tenant:        tenant._id,
+      property:      req.params.propertyId,
+      type:          'credit',
+      amount:        Number(tenantData.depositAmount),
+      balanceAfter:  0,   // no rent has been generated yet; informational only
+      referenceType: 'deposit_collected',
+      referenceId:   tenant._id,
+      description:   `Security deposit ₹${tenantData.depositAmount} collected at tenant creation`,
+    }).catch((err) => console.warn('[createTenant] deposit ledger failed:', err.message));
+  }
 
   res.status(201).json({ success: true, data: tenant });
 });
@@ -189,12 +219,16 @@ const updateTenant = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
 
-  // ── Immutability guard: prevent overwriting locked billing fields ──────────
-  // rentAmount and billingSnapshot are set ONLY during bed assignment.
-  // They must never be modified through the generic update endpoint.
+  // billingSnapshot is computed — never accept it from the client.
   const updateBody = { ...req.body };
-  delete updateBody.rentAmount;
   delete updateBody.billingSnapshot;
+
+  // ── rentAmount update: route through the bed layer so recalculation persists ─
+  // When a profile edit includes a new rentAmount, we update the bed's rent setting
+  // (rentOverride for normal beds, extraCharge for extra beds) then recalculate.
+  // This ensures the change survives future recalculations triggered by room events.
+  const newRentAmount = updateBody.rentAmount !== undefined ? Number(updateBody.rentAmount) : undefined;
+  delete updateBody.rentAmount; // handled separately below after the main save
 
   // ── Phone-uniqueness guard on update ────────────────────────────────────────
   if (updateBody.phone) {
@@ -218,6 +252,19 @@ const updateTenant = asyncHandler(async (req, res) => {
   if (markingDepositPaid) {
     prevTenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId })
       .select('depositPaid depositAmount').lean();
+
+    // Guard: reject if deposit is already collected — prevents accidental double-collection
+    if (prevTenant?.depositPaid === true) {
+      return res.status(400).json({
+        success: false,
+        message: 'Deposit has already been collected for this tenant',
+        code:    'DEPOSIT_ALREADY_COLLECTED',
+      });
+    }
+
+    // Stamp the collection timestamp; use client-provided date (backdating) or now.
+    if (!updateBody.depositPaidAt) updateBody.depositPaidAt = new Date();
+    else updateBody.depositPaidAt = new Date(updateBody.depositPaidAt);
   }
 
   const tenant = await Tenant.findOneAndUpdate(
@@ -243,6 +290,76 @@ const updateTenant = asyncHandler(async (req, res) => {
         referenceId:   tenant._id,
         description:   `Security deposit ₹${collectedAmt} collected (manually marked)`,
       });
+    }
+  }
+
+  // ── Route rentAmount through bed layer so it survives future recalculations ─
+  if (newRentAmount !== undefined && tenant.bed) {
+    try {
+      const bed = await Bed.findById(tenant.bed);
+      if (bed) {
+        const room = await Room.findById(bed.room);
+        if (room) {
+          if (bed.isExtra) {
+            bed.isChargeable = newRentAmount > 0;
+            bed.extraCharge  = newRentAmount > 0 ? newRentAmount : 0;
+          } else {
+            bed.rentOverride = newRentAmount > 0 ? newRentAmount : null;
+          }
+          await bed.save();
+
+          const rcTraceId = crypto.randomUUID();
+          await recalculateRoomRent(room, null, 'profile_rent_update', rcTraceId);
+
+          // Sync the current billing cycle's RentPayment to reflect the new amount
+          const freshTenant = await Tenant.findById(tenant._id)
+            .select('_id rentAmount property').lean();
+          if (freshTenant) {
+            const now    = new Date();
+            const month  = now.getMonth() + 1;
+            const year   = now.getFullYear();
+            const pendingPayment = await RentPayment.findOne({
+              tenant: freshTenant._id,
+              month,
+              year,
+              status: { $in: ['pending', 'overdue'] },
+            });
+
+            if (!pendingPayment && freshTenant.rentAmount > 0) {
+              await rentService.ensureCurrentCycleRentForTenant(freshTenant._id, freshTenant.property);
+            } else if (pendingPayment) {
+              const diff = freshTenant.rentAmount - pendingPayment.amount;
+              if (diff !== 0) {
+                await RentPayment.updateOne(
+                  { _id: pendingPayment._id },
+                  { $set: {
+                      amount:  freshTenant.rentAmount,
+                      balance: Math.max(0, freshTenant.rentAmount - (pendingPayment.paidAmount ?? 0)),
+                  }}
+                );
+                try {
+                  const currentBalance = await rentService.getTenantBalance(freshTenant._id);
+                  const newBalance     = currentBalance + diff;
+                  await LedgerEntry.create({
+                    tenant:        freshTenant._id,
+                    property:      freshTenant.property,
+                    type:          diff > 0 ? 'debit' : 'credit',
+                    amount:        Math.abs(diff),
+                    balanceAfter:  newBalance,
+                    referenceType: 'adjustment',
+                    referenceId:   pendingPayment._id,
+                    description:   `Rent updated from profile: ₹${pendingPayment.amount} → ₹${freshTenant.rentAmount}`,
+                  });
+                  await Tenant.findByIdAndUpdate(freshTenant._id, { ledgerBalance: newBalance });
+                } catch (_) { /* non-fatal — payment already updated */ }
+              }
+            }
+          }
+        }
+      }
+    } catch (rentErr) {
+      // Non-fatal: profile update succeeded; rent routing failed
+      console.warn('[updateTenant] rent routing failed:', rentErr.message);
     }
   }
 
@@ -477,12 +594,15 @@ const refundTenantAdvance = asyncHandler(async (req, res) => {
   const advMode = bed.reservation.reservationMode;
 
   const prevBalance = await rentService.getLastBalance(tenant._id);
-  const newBalance  = prevBalance - advAmt;
+  // Debit: removes the advance credit. Original apply was a credit (balance went -ve);
+  // refunding it must debit (balance returns toward 0).
+  // e.g. prevBalance = -500 (advance) → newBalance = -500 + 500 = 0
+  const newBalance  = prevBalance + advAmt;
 
   await LedgerEntry.create({
     tenant:        tenant._id,
     property:      property._id,
-    type:          'credit',
+    type:          'debit',
     amount:        advAmt,
     balanceAfter:  newBalance,
     referenceType: 'reservation_refunded',
@@ -513,18 +633,21 @@ const adjustDeposit = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'No deposit balance to adjust', code: 'NO_DEPOSIT' });
   }
 
-  const openRents = await RentPayment.find({
-    tenant:   tenant._id,
-    property: req.params.propertyId,
-    status:   { $in: ['pending', 'partial', 'overdue'] },
-  }).lean();
-  const pendingTotal = openRents.reduce((s, r) => s + (r.amount - (r.paidAmount ?? 0)), 0);
+  // Use ledger balance as source of truth — includes rent + charges, not just rent records.
+  const pendingTotal = await rentService.getLastBalance(tenant._id);
 
   if (pendingTotal <= 0) {
     return res.status(400).json({ success: false, message: 'No outstanding dues to adjust against', code: 'NO_DUES' });
   }
 
-  const applyAmt = Math.min(depositBal, pendingTotal);
+  // Optional partial amount from request body; defaults to full adjustment
+  const reqAmt = req.body?.amount ? Number(req.body.amount) : null;
+  if (reqAmt !== null) {
+    if (reqAmt <= 0)           return res.status(400).json({ success: false, message: 'Amount must be greater than zero' });
+    if (reqAmt > depositBal)   return res.status(400).json({ success: false, message: 'Amount exceeds available deposit balance' });
+    if (reqAmt > pendingTotal) return res.status(400).json({ success: false, message: 'Amount exceeds outstanding dues' });
+  }
+  const applyAmt = reqAmt ?? Math.min(depositBal, pendingTotal);
 
   await rentService.allocatePayment(req.params.propertyId, tenant._id, {
     amount:      applyAmt,
@@ -649,9 +772,121 @@ const fixBillingStart = asyncHandler(async (req, res) => {
   });
 });
 
+// ── GET /api/properties/:propertyId/tenants/:id/profile ──────────────────────
+// Single aggregated endpoint replacing 4 separate profile API calls.
+// Returns: tenant + rents + ledger (balance + recent entries) + advance + invoices
+const getTenantProfile = asyncHandler(async (req, res) => {
+  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
+
+  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId })
+    .populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } });
+  if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
+
+  // Ensure current cycle rent exists (lazy generation), suppress errors
+  try {
+    await rentService.ensureCurrentCycleRentForTenant(tenant._id, req.params.propertyId);
+  } catch (_) {}
+  try {
+    await rentService.syncOverdueRents(req.params.propertyId);
+  } catch (_) {}
+
+  const [rents, ledger, advance, invoices] = await Promise.all([
+    // Rents sorted newest first
+    RentPayment.find({ property: req.params.propertyId, tenant: tenant._id }).sort({ year: -1, month: -1 }).lean(),
+
+    // Ledger: balance + first page of entries (20 most recent for timeline)
+    rentService.getTenantLedger(tenant._id, { page: 1, limit: 20 }),
+
+    // Held reservation advance (null if none)
+    Bed.findOne({
+      tenant:    tenant._id,
+      isActive:  true,
+      'reservation.reservationAmount': { $gt: 0 },
+      'reservation.reservationStatus': 'held',
+    }).select('_id bedNumber room reservation reservedTill').populate('room', 'roomNumber').lean(),
+
+    // Invoices — newest first
+    Invoice.find({ property: req.params.propertyId, tenant: tenant._id })
+      .sort({ issuedAt: -1 })
+      .select('_id invoiceNumber status totalAmount balance month year issuedAt')
+      .lean(),
+  ]);
+
+  const advanceData = advance ? {
+    bedId:             advance._id,
+    bedNumber:         advance.bedNumber,
+    roomNumber:        advance.room?.roomNumber ?? null,
+    reservedTill:      advance.reservedTill,
+    reservationAmount: advance.reservation.reservationAmount,
+    reservationMode:   advance.reservation.reservationMode,
+    reservationStatus: advance.reservation.reservationStatus,
+  } : null;
+
+  res.json({
+    success: true,
+    data: {
+      tenant,
+      rents,
+      ledger,          // { entries, currentBalance, total, pages, page, limit }
+      advance: advanceData,
+      invoices,
+    },
+  });
+});
+
+// ── POST /api/properties/:propertyId/tenants/:id/vacate-with-payment ──────────
+// Atomic vacate + optional payment in one request.
+// Body: { vacateOption, paymentAmount, paymentMethod, checkOutDate?, notes?, depositAction? }
+// This is an alias that wraps the same vacateBedCore/vacateTenantCore logic
+// with explicit POST semantics for the frontend.
+const vacateWithPayment = asyncHandler(async (req, res) => {
+  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
+
+  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId });
+  if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
+  if (tenant.status === 'vacated') {
+    return res.status(400).json({ success: false, message: 'Tenant is already vacated' });
+  }
+
+  if (!tenant.bed) {
+    try {
+      const result = await vacateTenantCore({ propertyId: req.params.propertyId, tenant, opts: req.body, userId: req.user._id });
+      return res.json({ success: true, message: 'Tenant vacated', data: result.tenant });
+    } catch (err) {
+      return res.status(err.status ?? 500).json({ success: false, message: err.message, code: err.code ?? 'VACATE_ERROR' });
+    }
+  }
+
+  const bed = await Bed.findOne({ _id: tenant.bed, isActive: true });
+  if (!bed) {
+    try {
+      const result = await vacateTenantCore({ propertyId: req.params.propertyId, tenant, opts: req.body, userId: req.user._id });
+      return res.json({ success: true, message: 'Tenant vacated', data: result.tenant });
+    } catch (err) {
+      return res.status(err.status ?? 500).json({ success: false, message: err.message, code: err.code ?? 'VACATE_ERROR' });
+    }
+  }
+
+  const room = await Room.findById(bed.room);
+  if (!room) {
+    return res.status(500).json({ success: false, message: 'Room record not found', code: 'ROOM_NOT_FOUND' });
+  }
+
+  try {
+    const result = await vacateBedCore({ propertyId: req.params.propertyId, room, bed, tenant, opts: req.body, userId: req.user._id });
+    res.json({ success: true, message: 'Tenant vacated', data: result.tenant });
+  } catch (err) {
+    res.status(err.status ?? 500).json({ success: false, message: err.message, code: err.code ?? 'VACATE_ERROR' });
+  }
+});
+
 module.exports = {
   searchTenants, getTenants, getTenant, createTenant, updateTenant, vacateTenant,
   getTenantAdvance, applyTenantAdvance, refundTenantAdvance,
   adjustDeposit, refundDeposit,
   fixBillingStart,
+  getTenantProfile,
+  vacateWithPayment,
 };

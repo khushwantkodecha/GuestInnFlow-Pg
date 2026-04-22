@@ -1,102 +1,392 @@
 import { useState, useEffect } from 'react'
 import {
-  Building2, BedDouble, Users, CreditCard, Clock,
-  CheckCircle2, AlertTriangle, ArrowUpRight, LayoutGrid,
-  RefreshCw, Zap, Droplets, UtensilsCrossed, Wrench,
-  Wifi, UserCheck, Package, TrendingUp, TrendingDown,
-  ChevronRight,
+  Building2, BedDouble, Users, CreditCard,
+  AlertTriangle, ChevronRight, RefreshCw,
+  TrendingUp, TrendingDown, Plus,
+  IndianRupee, UserPlus,
 } from 'lucide-react'
-import { getPropertyDashboard, getDashboard } from '../api/dashboard'
-import { getRents } from '../api/rent'
+import { useNavigate } from 'react-router-dom'
+import { getPropertyDashboard, getRecentActivity } from '../api/dashboard'
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
-import StatCard from '../components/ui/StatCard'
 import Spinner from '../components/ui/Spinner'
-import EmptyState from '../components/ui/EmptyState'
 import { DashboardSkeleton } from '../components/ui/Skeleton'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const fmt    = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
-const pct    = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0)
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+const fmt     = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
+const pct     = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0)
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-const fmtPeriod = (m, y) => `${MONTH_NAMES[(m ?? 1) - 1]} ${y ?? ''}`
+const fmtPeriod  = (m, y) => `${MONTH_NAMES[(m ?? 1) - 1]} ${y ?? ''}`
 
-// ── Section label ─────────────────────────────────────────────────────────────
-const SectionLabel = ({ children }) => (
-  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-3 select-none">
-    {children}
-  </p>
-)
+const METHOD_LABELS = {
+  cash: 'Cash', upi: 'UPI', bank_transfer: 'Bank', cheque: 'Cheque', deposit_adjustment: 'Deposit',
+}
 
-// ── Donut chart (CSS conic-gradient) ──────────────────────────────────────────
+// ── Donut chart ───────────────────────────────────────────────────────────────
 const DonutChart = ({ occupied, reserved, vacant, total }) => {
   if (!total) return (
-    <div className="relative h-32 w-32 shrink-0 flex items-center justify-center rounded-full bg-slate-100">
+    <div className="relative h-28 w-28 shrink-0 flex items-center justify-center rounded-full bg-slate-100">
       <p className="text-[11px] text-slate-400 text-center leading-tight">No<br/>beds</p>
     </div>
   )
-
-  const occDeg = (occupied / total) * 360
-  const resDeg = (reserved / total) * 360
+  const occDeg  = (occupied / total) * 360
+  const resDeg  = (reserved / total) * 360
   const occRate = Math.round((occupied / total) * 100)
-
-  const gradient = `conic-gradient(
-    #3B82F6 0deg ${occDeg}deg,
-    #F59E0B ${occDeg}deg ${occDeg + resDeg}deg,
-    #22C55E ${occDeg + resDeg}deg 360deg
-  )`
+  const gradient = `conic-gradient(#3B82F6 0deg ${occDeg}deg, #F59E0B ${occDeg}deg ${occDeg + resDeg}deg, #22C55E ${occDeg + resDeg}deg 360deg)`
 
   return (
-    <div className="relative h-32 w-32 shrink-0">
+    <div className="relative h-28 w-28 shrink-0">
       <div className="h-full w-full rounded-full" style={{ background: gradient }} />
       <div className="absolute inset-[18%] rounded-full bg-white flex flex-col items-center justify-center"
         style={{ boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.06)' }}>
-        <p className="text-[22px] font-bold text-slate-800 leading-none">{occRate}%</p>
+        <p className="text-[20px] font-bold text-slate-800 leading-none">{occRate}%</p>
         <p className="text-[10px] text-slate-400 mt-0.5">Occupied</p>
       </div>
     </div>
   )
 }
 
-// ── Occupancy Overview card ───────────────────────────────────────────────────
-const OccupancyCard = ({ beds }) => {
-  const { total, occupied, vacant, reserved } = beds
-  const items = [
-    { label: 'Occupied', count: occupied, pct: pct(occupied, total), color: '#3B82F6', bg: 'bg-blue-50',    text: 'text-blue-600'    },
-    { label: 'Reserved', count: reserved, pct: pct(reserved, total), color: '#F59E0B', bg: 'bg-amber-50',   text: 'text-amber-600'   },
-    { label: 'Vacant',   count: vacant,   pct: pct(vacant, total),   color: '#22C55E', bg: 'bg-emerald-50', text: 'text-emerald-600' },
+// ── Quick Actions ─────────────────────────────────────────────────────────────
+const QuickActions = ({ navigate }) => {
+  const actions = [
+    { icon: IndianRupee, label: 'Collect Payment',  desc: 'Collect rent',  to: '/tenants', bg: 'rgba(96,195,173,0.10)', color: '#60C3AD' },
+    { icon: UserPlus,    label: 'Add New Tenant',   desc: 'Register new',  to: '/tenants', bg: 'rgba(59,130,246,0.10)', color: '#3B82F6' },
+    { icon: Plus,        label: 'Add Extra Charge', desc: 'Bill a charge', to: '/tenants', bg: 'rgba(245,158,11,0.10)', color: '#F59E0B' },
   ]
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      {actions.map(({ icon: Icon, label, desc, to, bg, color }) => (
+        <button key={label} type="button" onClick={() => navigate(to)}
+          className="flex flex-col items-center gap-2.5 p-4 rounded-2xl bg-white border border-slate-100 hover:border-slate-200 hover:shadow-sm active:scale-95 transition-all text-center">
+          <div className="h-10 w-10 rounded-xl flex items-center justify-center" style={{ background: bg, color }}>
+            <Icon size={18} />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-700">{label}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">{desc}</p>
+          </div>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── Alerts ────────────────────────────────────────────────────────────────────
+const AlertsSection = ({ financials, beds, navigate }) => {
+  const overdueCount   = financials.breakdown?.overdue?.count  ?? 0
+  const overdueAmt     = financials.breakdown?.overdue?.amount ?? 0
+  const pendingCount   = financials.breakdown?.pending?.count  ?? 0
+  const pendingAmt     = financials.breakdown?.pending?.amount ?? 0
+  const totalDueCount  = overdueCount + pendingCount
+  const totalDueAmount = overdueAmt + pendingAmt
+
+  const { status: bedStatus, total: totalBeds, occupied: occupiedBeds,
+          extraOccupants = 0, vacant: vacantBeds = 0 } = beds
+
+  const hasIssues = totalDueCount > 0 || bedStatus === 'over_capacity' || bedStatus === 'invalid_state'
+
+  if (!hasIssues) return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2.5 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
+        <span className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
+        <p className="text-[12px] font-medium text-emerald-700">No issues — everything looks good</p>
+      </div>
+      {vacantBeds > 0 && (
+        <div className="flex items-center gap-2.5 rounded-xl bg-blue-50 border border-blue-100 px-4 py-3">
+          <BedDouble size={13} className="text-blue-400 shrink-0" />
+          <p className="text-[12px] font-medium text-blue-600">
+            {vacantBeds} bed{vacantBeds !== 1 ? 's' : ''} available across this property
+          </p>
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <div className="space-y-2">
+      {/* Over-capacity alert */}
+      {bedStatus === 'over_capacity' && (
+        <div className="flex items-center gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3.5">
+          <AlertTriangle size={16} className="text-orange-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-orange-700">
+              {extraOccupants} extra occupant{extraOccupants !== 1 ? 's' : ''} beyond capacity
+            </p>
+            <p className="text-xs text-orange-500 mt-0.5">
+              Total beds: {totalBeds} · Occupied: {occupiedBeds}
+            </p>
+          </div>
+          <button type="button" onClick={() => navigate('/rooms')}
+            className="shrink-0 flex items-center gap-1 rounded-lg border border-orange-300 bg-white hover:bg-orange-50 active:scale-95 transition-all px-2.5 py-1.5 text-[11px] font-semibold text-orange-700">
+            View Rooms <ChevronRight size={10} />
+          </button>
+        </div>
+      )}
+
+      {/* Invalid state — data inconsistency */}
+      {bedStatus === 'invalid_state' && (
+        <div className="flex items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
+          <AlertTriangle size={16} className="text-red-500 shrink-0" />
+          <p className="text-sm font-bold text-red-700">
+            Data inconsistency: tenants assigned without beds
+          </p>
+        </div>
+      )}
+
+      {/* Dues alert */}
+      {totalDueCount > 0 && (
+        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3.5">
+          <div className="h-8 w-8 rounded-lg bg-red-100 border border-red-200 flex items-center justify-center shrink-0">
+            <IndianRupee size={14} className="text-red-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-red-700">
+              {totalDueCount} tenant{totalDueCount !== 1 ? 's' : ''} have pending dues
+            </p>
+            <p className="text-xs text-red-500 mt-0.5">{fmt(totalDueAmount)} outstanding this month</p>
+          </div>
+          <button type="button" onClick={() => navigate('/rent')}
+            className="shrink-0 flex items-center gap-1 rounded-lg bg-red-600 hover:bg-red-700 active:scale-95 transition-all px-3 py-1.5 text-[11px] font-bold text-white">
+            View Dues <ChevronRight size={11} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Financial Summary ─────────────────────────────────────────────────────────
+const FinancialSummaryCard = ({ financials, period, navigate }) => {
+  const { expectedRent, collectedRent, pendingRent, collectionRate, netIncome, totalExpenses } = financials
+  const rateColor  = collectionRate >= 80 ? 'text-emerald-600' : collectionRate >= 50 ? 'text-amber-500' : 'text-red-500'
+  const barColor   = collectionRate >= 80 ? 'bg-emerald-500'   : collectionRate >= 50 ? 'bg-amber-400'   : 'bg-red-500'
+  const isPositive = (netIncome ?? 0) >= 0
+
+  // Insight line
+  let insight = null
+  if (collectionRate === 100 && expectedRent > 0) {
+    insight = { text: 'All payments collected for this month', positive: true }
+  } else if (collectedRent === 0 && expectedRent > 0) {
+    insight = { text: 'No payments collected yet — start collecting rent', positive: false }
+  } else if (pendingRent > 0) {
+    insight = { text: `${fmt(pendingRent)} pending — collect payment or use deposit`, positive: false }
+  }
 
   return (
     <div className="card p-5">
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <p className="text-sm font-semibold text-slate-700">Occupancy Overview</p>
-          <p className="text-xs text-slate-400 mt-0.5">{total} total beds</p>
+          <p className="text-sm font-semibold text-slate-700">Financial Summary</p>
+          <p className="text-xs text-slate-400 mt-0.5">{period}</p>
         </div>
-        <span className="text-xs font-medium text-slate-500 bg-slate-50 border border-slate-200 rounded-full px-3 py-1">
+        <button type="button" onClick={() => navigate('/rent')}
+          className="flex items-center gap-1 text-[11px] font-semibold text-primary-500 hover:text-primary-600 transition-colors">
+          View rent <ChevronRight size={11} />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <div className="rounded-xl bg-slate-50 border border-slate-100 p-3 text-center">
+          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Expected this month</p>
+          <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(expectedRent)}</p>
+        </div>
+        <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-center">
+          <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-wide mb-1">Collected</p>
+          <p className="text-sm font-bold text-emerald-700 tabular-nums">{fmt(collectedRent)}</p>
+        </div>
+        <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-center">
+          <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wide mb-1">Remaining</p>
+          <p className="text-sm font-bold text-amber-700 tabular-nums">{fmt(pendingRent)}</p>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[11px] text-slate-400">Collection rate</span>
+          <span className={`text-xs font-bold ${rateColor}`}>{collectionRate}%</span>
+        </div>
+        <div className="h-2 w-full rounded-full bg-slate-100">
+          <div className={`h-2 rounded-full transition-all duration-700 ${barColor}`}
+            style={{ width: `${Math.min(collectionRate, 100)}%` }} />
+        </div>
+      </div>
+
+      {insight && (
+        <div className={`flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-3 border text-[11px] font-medium ${
+          insight.positive
+            ? 'bg-emerald-50 border-emerald-100 text-emerald-700'
+            : 'bg-amber-50 border-amber-100 text-amber-700'
+        }`}>
+          {insight.positive
+            ? <TrendingUp size={12} className="text-emerald-500 shrink-0" />
+            : <AlertTriangle size={12} className="text-amber-500 shrink-0" />}
+          {insight.text}
+        </div>
+      )}
+
+      <div className={`flex items-center justify-between rounded-xl px-3.5 py-2.5 border ${isPositive ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+        <div className="flex items-center gap-2">
+          {isPositive
+            ? <TrendingUp size={13} className="text-emerald-500 shrink-0" />
+            : <TrendingDown size={13} className="text-red-500 shrink-0" />}
+          <span className="text-[11px] font-medium text-slate-600">Net income</span>
+          {totalExpenses > 0 && (
+            <span className="text-[10px] text-slate-400">after {fmt(totalExpenses)} expenses</span>
+          )}
+        </div>
+        <span className={`text-sm font-bold tabular-nums ${isPositive ? 'text-emerald-700' : 'text-red-600'}`}>
+          {fmt(netIncome)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+// ── Recent Activity ───────────────────────────────────────────────────────────
+const CHARGE_TYPE_LABELS = { damage: 'Damage', extra: 'Extra', penalty: 'Penalty', other: 'Charge' }
+
+const ActivityRow = ({ item }) => {
+  const isPayment = item._type === 'payment'
+  return (
+    <div className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50/60 transition-colors">
+      <div className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 border ${
+        isPayment ? 'bg-emerald-50 border-emerald-100' : 'bg-orange-50 border-orange-100'
+      }`}>
+        <span className={`text-[10px] font-bold ${isPayment ? 'text-emerald-600' : 'text-orange-600'}`}>
+          {(item.tenant?.name ?? '?').slice(0, 2).toUpperCase()}
+        </span>
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-slate-700 truncate">{item.tenant?.name ?? '—'}</p>
+        <p className="text-[11px] text-slate-400 mt-0.5">
+          {isPayment
+            ? `${METHOD_LABELS[item.method] ?? item.method}${item.referenceId ? ` · ${item.referenceId}` : ''}`
+            : `${CHARGE_TYPE_LABELS[item.chargeType] ?? 'Charge'}${item.description ? ` · ${item.description}` : ''}`
+          }
+        </p>
+      </div>
+
+      <div className="text-right shrink-0">
+        <p className={`text-sm font-bold tabular-nums ${isPayment ? 'text-emerald-600' : 'text-orange-600'}`}>
+          {isPayment ? '+' : '−'}{fmt(item.amount)}
+        </p>
+        <div className="flex items-center justify-end gap-1 mt-0.5">
+          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
+            isPayment ? 'bg-emerald-50 text-emerald-600' : 'bg-orange-50 text-orange-600'
+          }`}>
+            {isPayment ? 'Payment' : 'Charge'}
+          </span>
+          <span className="text-[10px] text-slate-400">{fmtDate(item.createdAt)}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const ACTIVITY_FILTERS = [
+  { id: 'all',      label: 'All'      },
+  { id: 'payment',  label: 'Payments' },
+  { id: 'charge',   label: 'Charges'  },
+]
+
+const RecentActivityCard = ({ activity, loading, navigate }) => {
+  const [filter, setFilter] = useState('all')
+
+  const filtered = filter === 'all'
+    ? activity
+    : activity.filter(i => i._type === filter)
+  const displayed = filtered.slice(0, 5)
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+        <p className="text-sm font-semibold text-slate-700">Recent Activity</p>
+        <button type="button" onClick={() => navigate('/tenants')}
+          className="flex items-center gap-1 text-[11px] font-semibold text-primary-500 hover:text-primary-600 transition-colors">
+          View all <ChevronRight size={11} />
+        </button>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-1 px-5 pt-3 pb-1">
+        {ACTIVITY_FILTERS.map(({ id, label }) => (
+          <button key={id} type="button" onClick={() => setFilter(id)}
+            className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+              filter === id
+                ? 'bg-slate-800 text-white'
+                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="p-6 flex justify-center"><Spinner /></div>
+      ) : displayed.length === 0 ? (
+        <div className="px-5 py-8 text-center">
+          <p className="text-sm text-slate-400">
+            {filter === 'all' ? 'No activity yet.' : `No ${filter}s found.`}
+          </p>
+          {filter === 'all' && (
+            <button type="button" onClick={() => navigate('/tenants')}
+              className="mt-2 text-xs font-semibold text-primary-500 hover:underline">
+              Record first payment →
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-50">
+          {displayed.map((item) => <ActivityRow key={item._id} item={item} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Occupancy Card ────────────────────────────────────────────────────────────
+const STATUS_STRIP = {
+  full:          { label: 'Fully occupied',                     cls: 'bg-blue-50 border-blue-100 text-blue-700'     },
+  no_capacity:   { label: 'No beds configured',                 cls: 'bg-slate-50 border-slate-200 text-slate-500'  },
+}
+
+const OccupancyCard = ({ beds }) => {
+  const { total, occupied, vacant, reserved, status } = beds
+  const items = [
+    { label: 'Occupied', count: occupied, p: pct(occupied, total), color: '#3B82F6', bg: 'bg-blue-50',    text: 'text-blue-600'    },
+    { label: 'Reserved', count: reserved, p: pct(reserved, total), color: '#F59E0B', bg: 'bg-amber-50',   text: 'text-amber-600'   },
+    { label: 'Vacant',   count: vacant,   p: pct(vacant, total),   color: '#22C55E', bg: 'bg-emerald-50', text: 'text-emerald-600' },
+  ]
+  const strip = STATUS_STRIP[status]
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <p className="text-sm font-semibold text-slate-700">Occupancy</p>
+          <p className="text-xs text-slate-400 mt-0.5">{total} beds total</p>
+        </div>
+        <span className="text-[10px] font-semibold text-slate-400 bg-slate-50 border border-slate-200 rounded-full px-2.5 py-1">
           Live
         </span>
       </div>
 
-      <div className="flex items-center gap-6">
-        {/* Donut */}
+      <div className="flex items-center gap-5 mb-4">
         <DonutChart occupied={occupied} reserved={reserved} vacant={vacant} total={total} />
-
-        {/* Legend */}
-        <div className="flex-1 space-y-3">
-          {items.map(({ label, count, pct: p, color, bg, text }) => (
+        <div className="flex-1 space-y-2.5">
+          {items.map(({ label, count, p, color, bg, text }) => (
             <div key={label}>
               <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full shrink-0" style={{ background: color }} />
-                  <span className="text-xs font-medium text-slate-600">{label}</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+                  <span className="text-[11px] font-medium text-slate-600">{label}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-bold px-1.5 py-0.5 rounded-md ${bg} ${text}`}>{count}</span>
-                  <span className="text-xs text-slate-400 w-7 text-right">{p}%</span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-md ${bg} ${text}`}>{count}</span>
+                  <span className="text-[10px] text-slate-400 w-6 text-right">{p}%</span>
                 </div>
               </div>
               <div className="h-1.5 w-full rounded-full bg-slate-100">
@@ -107,441 +397,142 @@ const OccupancyCard = ({ beds }) => {
         </div>
       </div>
 
-      {/* Segmented bar */}
       {total > 0 && (
-        <div className="mt-5 flex h-2 w-full rounded-full overflow-hidden gap-0.5">
-          {occupied > 0 && <div className="h-full bg-blue-500 transition-all duration-700" style={{ width: `${pct(occupied, total)}%` }} />}
-          {reserved > 0 && <div className="h-full bg-amber-400 transition-all duration-700" style={{ width: `${pct(reserved, total)}%` }} />}
-          {vacant > 0   && <div className="h-full bg-emerald-400 flex-1" />}
+        <div className="flex h-1.5 w-full rounded-full overflow-hidden gap-0.5 mb-3">
+          {occupied > 0 && <div className="h-full bg-blue-500"   style={{ width: `${pct(occupied, total)}%` }} />}
+          {reserved > 0 && <div className="h-full bg-amber-400"  style={{ width: `${pct(reserved, total)}%` }} />}
+          {vacant   > 0 && <div className="h-full bg-emerald-400 flex-1" />}
+        </div>
+      )}
+
+      {strip && (
+        <div className={`flex items-center justify-center rounded-xl border px-3 py-2 text-[11px] font-semibold ${strip.cls}`}>
+          {strip.label}
         </div>
       )}
     </div>
   )
 }
 
-// ── Rent Collection card ──────────────────────────────────────────────────────
-const RentCollectionCard = ({ financials }) => {
-  const { collectionRate, collectedRent, pendingRent, breakdown } = financials
-  const rateColor = collectionRate >= 80 ? 'text-emerald-600' : collectionRate >= 50 ? 'text-amber-600' : 'text-red-500'
-  const barColor  = collectionRate >= 80 ? 'bg-emerald-500'  : collectionRate >= 50 ? 'bg-amber-400'   : 'bg-red-500'
-
-  const segments = [
-    {
-      key: 'paid',
-      label: 'Paid',
-      amount: breakdown?.paid?.amount ?? 0,
-      count: breakdown?.paid?.count ?? 0,
-      bg: 'bg-emerald-50', border: 'border-emerald-200',
-      dot: 'bg-emerald-500', text: 'text-emerald-700', sub: 'text-emerald-600',
-    },
-    {
-      key: 'pending',
-      label: 'Pending',
-      amount: breakdown?.pending?.amount ?? 0,
-      count: breakdown?.pending?.count ?? 0,
-      bg: 'bg-amber-50', border: 'border-amber-200',
-      dot: 'bg-amber-400', text: 'text-amber-700', sub: 'text-amber-600',
-    },
-    {
-      key: 'overdue',
-      label: 'Overdue',
-      amount: breakdown?.overdue?.amount ?? 0,
-      count: breakdown?.overdue?.count ?? 0,
-      bg: 'bg-red-50', border: 'border-red-200',
-      dot: 'bg-red-500', text: 'text-red-700', sub: 'text-red-600',
-    },
-  ]
-
-  return (
-    <div className="card p-5">
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <p className="text-sm font-semibold text-slate-700">Rent Collection</p>
-          <p className="text-xs text-slate-400 mt-0.5">{fmt(collectedRent)} collected</p>
-        </div>
-        <span className={`text-lg font-bold ${rateColor}`}>{collectionRate}%</span>
-      </div>
-
-      {/* Collection rate bar */}
-      <div className="mb-1">
-        <div className="flex justify-between text-xs text-slate-400 mb-1.5">
-          <span>Collection rate</span>
-          <span className={`font-semibold ${rateColor}`}>{collectionRate}%</span>
-        </div>
-        <div className="h-2 w-full rounded-full bg-slate-100">
-          <div
-            className={`h-2 rounded-full transition-all duration-700 ${barColor}`}
-            style={{ width: `${Math.min(collectionRate, 100)}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Breakdown pills */}
-      <div className="grid grid-cols-3 gap-2.5 mt-5">
-        {segments.map(({ key, label, amount, count, bg, border, dot, text, sub }) => (
-          <div key={key} className={`rounded-xl p-3 border ${bg} ${border}`}>
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${dot}`} />
-              <span className={`text-[11px] font-semibold ${text}`}>{label}</span>
-            </div>
-            <p className={`text-base font-bold leading-tight ${text}`}>{fmt(amount)}</p>
-            <p className={`text-[11px] mt-0.5 ${sub}`}>{count} tenant{count !== 1 ? 's' : ''}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── Status badge ──────────────────────────────────────────────────────────────
-const StatusBadge = ({ status }) => {
-  const cfg = {
-    paid:    { label: 'Paid',    cls: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
-    pending: { label: 'Pending', cls: 'bg-amber-50 border-amber-200 text-amber-700'       },
-    overdue: { label: 'Overdue', cls: 'bg-red-50 border-red-200 text-red-600'             },
-  }
-  const { label, cls } = cfg[status] ?? cfg.pending
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${cls}`}>
-      {label}
-    </span>
-  )
-}
-
-// ── Rent Payments Table ───────────────────────────────────────────────────────
-const RentTable = ({ rents, loading, period }) => (
-  <div className="card overflow-hidden">
-    <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-      <div>
-        <p className="text-sm font-semibold text-slate-700">Rent Payments</p>
-        <p className="text-xs text-slate-400 mt-0.5">{period}</p>
-      </div>
-      {loading && <Spinner size={14} />}
-    </div>
-
-    {loading && rents.length === 0 ? (
-      <div className="p-8 flex justify-center"><Spinner /></div>
-    ) : rents.length === 0 ? (
-      <div className="p-8 text-center">
-        <p className="text-sm text-slate-400">No rent records for this period.</p>
-        <p className="text-xs text-slate-300 mt-1">Generate rent from the Rent Payments page.</p>
-      </div>
-    ) : (
-      <div className="overflow-x-auto">
-        <table className="min-w-full">
-          <thead>
-            <tr className="border-b border-slate-100 bg-slate-50/60">
-              <th className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400">Tenant</th>
-              <th className="px-5 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-400">Amount</th>
-              <th className="px-5 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-400 hidden sm:table-cell">Paid</th>
-              <th className="px-5 py-3 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-400">Status</th>
-              <th className="px-5 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-400 hidden md:table-cell">Due Date</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rents.map((r) => (
-              <tr key={r._id} className="hover:bg-slate-50 transition-colors duration-150">
-                <td className="px-5 py-3.5">
-                  <div className="flex items-center gap-2.5">
-                    <div className="h-7 w-7 rounded-full bg-primary-50 border border-primary-100 flex items-center justify-center shrink-0">
-                      <span className="text-[10px] font-bold text-primary-600">
-                        {(r.tenant?.name ?? '?').slice(0, 2).toUpperCase()}
-                      </span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-700">{r.tenant?.name ?? 'Unknown'}</p>
-                      <p className="text-[11px] text-slate-400">{r.tenant?.phone ?? ''}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-5 py-3.5 text-right text-sm font-semibold text-slate-700">{fmt(r.amount)}</td>
-                <td className="px-5 py-3.5 text-right text-sm text-slate-500 hidden sm:table-cell">
-                  {r.paidAmount > 0 ? fmt(r.paidAmount) : <span className="text-slate-300">—</span>}
-                </td>
-                <td className="px-5 py-3.5 text-center"><StatusBadge status={r.status} /></td>
-                <td className="px-5 py-3.5 text-right text-sm text-slate-500 hidden md:table-cell">{fmtDate(r.dueDate)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    )}
-  </div>
-)
-
-// ── Expense breakdown card ────────────────────────────────────────────────────
-const EXPENSE_CONFIG = {
-  electricity: { label: 'Electricity', icon: Zap,              color: '#F59E0B', bar: 'bg-amber-400',   text: 'text-amber-600'   },
-  water:       { label: 'Water',       icon: Droplets,         color: '#3B82F6', bar: 'bg-blue-400',    text: 'text-blue-600'    },
-  food:        { label: 'Food',        icon: UtensilsCrossed,  color: '#F97316', bar: 'bg-orange-400',  text: 'text-orange-600'  },
-  maintenance: { label: 'Maintenance', icon: Wrench,           color: '#EF4444', bar: 'bg-red-400',     text: 'text-red-600'     },
-  internet:    { label: 'Internet',    icon: Wifi,             color: '#8B5CF6', bar: 'bg-violet-400',  text: 'text-violet-600'  },
-  salary:      { label: 'Salary',      icon: UserCheck,        color: '#22C55E', bar: 'bg-emerald-400', text: 'text-emerald-600' },
-  other:       { label: 'Other',       icon: Package,          color: '#94A3B8', bar: 'bg-slate-300',   text: 'text-slate-500'   },
-}
-
-const ExpenseCard = ({ expenses }) => {
-  const { total, breakdown } = expenses
-  const entries = Object.entries(breakdown ?? {})
-    .filter(([, v]) => v > 0)
-    .sort(([, a], [, b]) => b - a)
-
-  return (
-    <div className="card p-5">
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <p className="text-sm font-semibold text-slate-700">Expenses</p>
-          <p className="text-xs text-slate-400 mt-0.5">This month</p>
-        </div>
-        <p className="text-base font-bold text-slate-800">{fmt(total)}</p>
-      </div>
-
-      {entries.length === 0 ? (
-        <p className="text-sm text-slate-400 text-center py-6">No expenses recorded this month.</p>
-      ) : (
-        <div className="space-y-3.5">
-          {entries.map(([type, amount]) => {
-            const cfg = EXPENSE_CONFIG[type] ?? EXPENSE_CONFIG.other
-            const IconEl = cfg.icon
-            const share = pct(amount, total)
-            return (
-              <div key={type}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <div className="h-6 w-6 rounded-lg flex items-center justify-center shrink-0"
-                      style={{ background: `${cfg.color}18` }}>
-                      <IconEl size={12} style={{ color: cfg.color }} />
-                    </div>
-                    <span className="text-xs font-medium text-slate-600">{cfg.label}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-700">{fmt(amount)}</span>
-                    <span className="text-[11px] text-slate-400 w-7 text-right">{share}%</span>
-                  </div>
-                </div>
-                <div className="h-1.5 w-full rounded-full bg-slate-100">
-                  <div className={`h-1.5 rounded-full transition-all duration-700 ${cfg.bar}`}
-                    style={{ width: `${share}%` }} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Tenant Activity card ──────────────────────────────────────────────────────
-const TenantActivityCard = ({ tenants, financials, deposits }) => {
-  const { active, onNotice, newCheckInsThisMonth } = tenants
-  const { collectionRate } = financials
-
-  const rateColor = collectionRate >= 80 ? 'text-emerald-600' : collectionRate >= 50 ? 'text-amber-600' : 'text-red-500'
-  const rateBar   = collectionRate >= 80 ? 'bg-emerald-500'   : collectionRate >= 50 ? 'bg-amber-400'   : 'bg-red-500'
-
+// ── Tenant Summary ────────────────────────────────────────────────────────────
+const TenantSummaryCard = ({ tenants, navigate }) => {
   const rows = [
-    { label: 'Active Tenants',   value: active,               icon: Users,         color: 'text-primary-500',  bg: 'bg-primary-50'  },
-    { label: 'On Notice',        value: onNotice,             icon: AlertTriangle, color: 'text-amber-500',   bg: 'bg-amber-50'    },
-    { label: 'New This Month',   value: newCheckInsThisMonth, icon: TrendingUp,    color: 'text-blue-500',    bg: 'bg-blue-50'     },
+    { label: 'Active',         value: tenants.active,               color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
+    { label: 'On Notice',      value: tenants.onNotice,             color: 'text-amber-600',   bg: 'bg-amber-50',   border: 'border-amber-100'   },
+    { label: 'New this month', value: tenants.newCheckInsThisMonth, color: 'text-blue-600',    bg: 'bg-blue-50',    border: 'border-blue-100'    },
   ]
 
   return (
-    <div className="card p-5">
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <p className="text-sm font-semibold text-slate-700">Tenant Activity</p>
-          <p className="text-xs text-slate-400 mt-0.5">Current status</p>
-        </div>
-        <div className="h-8 w-8 rounded-xl bg-primary-50 flex items-center justify-center">
-          <Users size={15} className="text-primary-500" />
-        </div>
+    <button type="button" onClick={() => navigate('/tenants')}
+      className="card p-5 w-full text-left hover:shadow-md transition-shadow cursor-pointer">
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm font-semibold text-slate-700">Tenants</p>
+        <span className="flex items-center gap-1 text-[11px] font-semibold text-primary-500">
+          View Tenants <ChevronRight size={11} />
+        </span>
       </div>
-
-      {/* Stat rows */}
-      <div className="space-y-2 mb-5">
-        {rows.map(({ label, value, icon: Icon, color, bg }) => (
-          <div key={label} className="flex items-center justify-between rounded-xl px-3.5 py-2.5 bg-slate-50 border border-slate-100">
-            <div className="flex items-center gap-2.5">
-              <div className={`h-6 w-6 rounded-lg ${bg} flex items-center justify-center shrink-0`}>
-                <Icon size={12} className={color} />
-              </div>
-              <span className="text-sm text-slate-600">{label}</span>
-            </div>
-            <span className="text-sm font-bold text-slate-800">{value}</span>
+      <div className="space-y-2 mb-3">
+        {rows.map(({ label, value, color, bg, border }) => (
+          <div key={label} className={`flex items-center justify-between rounded-xl px-3.5 py-2.5 ${bg} border ${border}`}>
+            <span className="text-[12px] font-medium text-slate-600">{label}</span>
+            <span className={`text-base font-bold tabular-nums ${color}`}>{value}</span>
           </div>
         ))}
       </div>
-
-      {/* Collection rate mini */}
-      <div className="rounded-xl bg-slate-50 border border-slate-100 p-3.5">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-slate-500 font-medium">Collection Rate</span>
-          <span className={`text-xs font-bold ${rateColor}`}>{collectionRate}%</span>
-        </div>
-        <div className="h-1.5 w-full rounded-full bg-slate-200">
-          <div className={`h-1.5 rounded-full transition-all duration-700 ${rateBar}`}
-            style={{ width: `${Math.min(collectionRate, 100)}%` }} />
-        </div>
+      <div className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-slate-100 bg-slate-50 hover:bg-slate-100 py-2 text-xs font-semibold text-slate-500 transition-colors">
+        <Users size={12} /> Manage Tenants
       </div>
-
-      {/* Deposits */}
-      {deposits && deposits.total > 0 && (
-        <div className="mt-3 flex items-center justify-between rounded-xl px-3.5 py-2.5 bg-primary-50 border border-primary-100">
-          <span className="text-xs font-medium text-primary-700">Deposits Collected</span>
-          <span className="text-sm font-bold text-primary-600">{fmt(deposits.collected)}</span>
-        </div>
-      )}
-    </div>
+    </button>
   )
 }
 
-// ── Financial Summary Banner ──────────────────────────────────────────────────
-const FinancialBanner = ({ financials, period }) => {
-  const { totalCollected, collectedRent, collectedDeposit, pendingRent, totalExpenses, netIncome, collectionRate } = financials
-  const isPositive = (netIncome ?? 0) >= 0
+// ── No Property Empty State ───────────────────────────────────────────────────
+const NoPropertyState = () => {
+  const navigate = useNavigate()
+  const features = [
+    { icon: BedDouble,  label: 'Rooms & Beds',      desc: 'Manage rooms, beds, and occupancy'  },
+    { icon: Users,      label: 'Tenant Management', desc: 'Track tenants, leases, and history' },
+    { icon: CreditCard, label: 'Rent Collection',   desc: 'Collect and track rent payments'    },
+    { icon: TrendingUp, label: 'Financial Reports',  desc: 'Ledger, charges, and summaries'     },
+  ]
 
   return (
-    <div className="card overflow-hidden">
-      {/* Top accent bar */}
-      <div className="h-1 w-full bg-gradient-to-r from-primary-400 to-primary-500" />
+    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
+      <div className="w-full max-w-2xl">
+        <div className="text-center mb-10">
+          <div className="inline-flex items-center justify-center h-20 w-20 rounded-3xl mb-5 mx-auto"
+            style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
+            <Building2 size={36} style={{ color: '#60C3AD' }} />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Welcome to TenantInnFlow</h1>
+          <p className="text-slate-400 mt-2 text-sm leading-relaxed max-w-sm mx-auto">
+            Add your first property to start managing rooms, tenants, and rent — all in one place.
+          </p>
+        </div>
 
-      <div className="p-5 sm:p-6">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-5">
-          {/* Left */}
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-1">
-              Total Collected — {period}
-            </p>
-            <p className="text-3xl font-bold text-slate-800 leading-tight">{fmt(totalCollected)}</p>
-            <p className="text-sm text-slate-400 mt-1.5">
-              {fmt(collectedRent)} rent
-              {collectedDeposit > 0 && ` · ${fmt(collectedDeposit)} deposits`}
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-6">
+          <div className="px-6 py-5 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Create your first property</p>
+              <p className="text-xs text-slate-400 mt-0.5">Takes less than a minute to set up</p>
+            </div>
+            <button onClick={() => navigate('/properties')}
+              className="shrink-0 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+              style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}>
+              <Plus size={15} /> Add Property
+            </button>
+          </div>
+          <div className="h-px bg-slate-100" />
+          <div className="px-6 py-4 bg-slate-50/60">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-3">
+              Or select an existing property from the sidebar
             </p>
           </div>
+        </div>
 
-          {/* Right: mini stat boxes */}
-          <div className="flex flex-wrap gap-3">
-            <div className="rounded-xl px-4 py-3 bg-amber-50 border border-amber-200 text-center min-w-[100px]">
-              <p className="text-[11px] font-semibold text-amber-600 mb-1">Pending</p>
-              <p className="text-base font-bold text-amber-700">{fmt(pendingRent)}</p>
-            </div>
-            <div className="rounded-xl px-4 py-3 bg-red-50 border border-red-200 text-center min-w-[100px]">
-              <p className="text-[11px] font-semibold text-red-500 mb-1">Expenses</p>
-              <p className="text-base font-bold text-red-600">{fmt(totalExpenses)}</p>
-            </div>
-            <div className={`rounded-xl px-4 py-3 border text-center min-w-[100px] ${isPositive ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
-              <p className={`text-[11px] font-semibold mb-1 ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>Net Income</p>
-              <div className="flex items-center justify-center gap-1">
-                {isPositive
-                  ? <TrendingUp size={13} className="text-emerald-500" />
-                  : <TrendingDown size={13} className="text-red-500" />}
-                <p className={`text-base font-bold ${isPositive ? 'text-emerald-700' : 'text-red-600'}`}>{fmt(netIncome)}</p>
+        <div className="grid grid-cols-2 gap-3">
+          {features.map(({ icon: Icon, label, desc }) => (
+            <div key={label} className="rounded-xl border border-slate-100 bg-white px-4 py-3.5 flex items-start gap-3">
+              <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-lg"
+                style={{ background: 'rgba(96,195,173,0.10)', color: '#60C3AD' }}>
+                <Icon size={15} />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-slate-700">{label}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">{desc}</p>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Collection progress */}
-        <div className="mt-5">
-          <div className="flex justify-between text-xs text-slate-400 mb-1.5">
-            <span>Rent collection progress</span>
-            <span className="font-semibold text-slate-600">{collectionRate}%</span>
-          </div>
-          <div className="h-2 w-full rounded-full bg-slate-100">
-            <div
-              className="h-2 rounded-full bg-primary-500 transition-all duration-700"
-              style={{ width: `${Math.min(collectionRate, 100)}%` }}
-            />
-          </div>
+          ))}
         </div>
       </div>
     </div>
   )
 }
 
-// ── Vacant Beds Widget ────────────────────────────────────────────────────────
-const VacantBedsWidget = ({ beds }) => {
-  const { vacant, reserved, total } = beds
-  const vacancyRate = pct(vacant, total)
-
-  return (
-    <div className="card p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <p className="text-sm font-semibold text-slate-700">Available Capacity</p>
-          <p className="text-xs text-slate-400 mt-0.5">Beds ready to occupy</p>
-        </div>
-        <div className="h-9 w-9 rounded-xl bg-emerald-50 flex items-center justify-center">
-          <BedDouble size={16} className="text-emerald-500" />
-        </div>
-      </div>
-
-      <div className="flex items-end gap-2 mb-4">
-        <p className="text-4xl font-bold text-slate-800 leading-none">{vacant}</p>
-        <p className="text-sm text-slate-400 mb-1">vacant bed{vacant !== 1 ? 's' : ''}</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 text-center">
-          <p className="text-[11px] font-medium text-emerald-600 mb-0.5">Vacant</p>
-          <p className="text-lg font-bold text-emerald-700">{vacant}</p>
-        </div>
-        <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-center">
-          <p className="text-[11px] font-medium text-amber-600 mb-0.5">Reserved</p>
-          <p className="text-lg font-bold text-amber-700">{reserved}</p>
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <div className="flex justify-between text-xs text-slate-400 mb-1.5">
-          <span>Vacancy rate</span>
-          <span className="font-semibold text-slate-600">{vacancyRate}%</span>
-        </div>
-        <div className="h-1.5 w-full rounded-full bg-slate-100">
-          <div className="h-1.5 rounded-full bg-emerald-400 transition-all duration-700"
-            style={{ width: `${vacancyRate}%` }} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Main Dashboard page ───────────────────────────────────────────────────────
+// ── Main Dashboard ────────────────────────────────────────────────────────────
 const Dashboard = () => {
-  const { selectedProperty, isAllProperties, properties } = useProperty()
+  const { selectedProperty } = useProperty()
   const propertyId = selectedProperty?._id ?? ''
+  const navigate   = useNavigate()
 
   const { data, loading, error, refetch } = useApi(
-    () => isAllProperties
-      ? getDashboard()
-      : propertyId
-        ? getPropertyDashboard(propertyId)
-        : Promise.resolve({ data: null }),
-    [propertyId, isAllProperties]
+    () => propertyId ? getPropertyDashboard(propertyId) : Promise.resolve({ data: null }),
+    [propertyId]
   )
 
-  // Secondary fetch — current-month rent payments (single-property only)
-  const [recentRents, setRecentRents] = useState([])
-  const [rentsLoading, setRentsLoading] = useState(false)
+  const [activity,        setActivity]        = useState([])
+  const [activityLoading, setActivityLoading] = useState(false)
 
   useEffect(() => {
-    if (!propertyId || isAllProperties) { setRecentRents([]); return }
-    setRentsLoading(true)
-    const now = new Date()
-    getRents(propertyId, { month: now.getMonth() + 1, year: now.getFullYear() })
-      .then((res) => setRecentRents(res.data?.data ?? []))
-      .catch(() => setRecentRents([]))
-      .finally(() => setRentsLoading(false))
-  }, [propertyId, isAllProperties])
+    if (!propertyId) { setActivity([]); return }
+    setActivityLoading(true)
+    getRecentActivity(propertyId)
+      .then(res => setActivity(res.data?.data ?? []))
+      .catch(() => setActivity([]))
+      .finally(() => setActivityLoading(false))
+  }, [propertyId])
 
-  // ── Guards ──
-  if (!isAllProperties && !propertyId) return (
-    <div className="card max-w-lg">
-      <EmptyState message="No property selected. Choose one from the sidebar." />
-    </div>
-  )
-
+  if (!propertyId) return <NoPropertyState />
   if (loading) return <DashboardSkeleton />
 
   if (error) return (
@@ -560,212 +551,42 @@ const Dashboard = () => {
   const d = data?.data
   if (!d) return null
 
-  const now      = new Date()
-  const period   = fmtPeriod(d.financials.month, d.financials.year)
-  const heading  = isAllProperties
-    ? `All Properties (${properties.length})`
-    : (data?.data?.property?.name ?? selectedProperty?.name ?? '')
+  const period  = fmtPeriod(d.financials.month, d.financials.year)
+  const heading = d.property?.name ?? selectedProperty?.name ?? ''
 
   return (
-    <div className="space-y-6 max-w-7xl">
+    <div className="space-y-5 max-w-6xl">
 
-      {/* ── Page header ── */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="flex items-center gap-2">
-            {isAllProperties && <LayoutGrid size={16} className="text-primary-500" />}
-            <h1 className="text-lg font-bold text-slate-800">{heading}</h1>
-          </div>
-          <p className="text-xs text-slate-400 mt-0.5">{period} · Updated just now</p>
+          <h1 className="text-lg font-bold text-slate-800">{heading}</h1>
+          <p className="text-xs text-slate-400 mt-0.5">{period}</p>
         </div>
-        <button onClick={refetch} className="btn-secondary text-xs gap-1.5 py-2">
-          <RefreshCw size={13} />
-          Refresh
+        <button type="button" onClick={refetch} className="btn-secondary text-xs gap-1.5 py-2">
+          <RefreshCw size={13} /> Refresh
         </button>
       </div>
 
-      {/* ── KPI Row 1 — Properties, Rooms, Beds ── */}
-      <div>
-        <SectionLabel>Overview</SectionLabel>
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-          <StatCard
-            label="Total Properties"
-            value={d.properties.total}
-            icon={Building2}
-            color="teal"
-            sub={isAllProperties ? 'All active properties' : 'Current property'}
-          />
-          <StatCard
-            label="Total Rooms"
-            value={d.rooms.total}
-            icon={BedDouble}
-            color="blue"
-            sub={`${d.beds.total} beds total`}
-          />
-          <div className="col-span-2 lg:col-span-1">
-            <StatCard
-              label="Active Tenants"
-              value={d.tenants.active}
-              icon={Users}
-              color="green"
-              sub={`${d.tenants.onNotice} on notice`}
-              progress={pct(d.tenants.active, d.beds.total)}
-              progressLabel="Bed occupancy"
-            />
-          </div>
-        </div>
-      </div>
+      {/* Quick Actions */}
+      <QuickActions navigate={navigate} />
 
-      {/* ── KPI Row 2 — Occupancy + Financials ── */}
-      <div>
-        <SectionLabel>Beds & Financials</SectionLabel>
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-          <StatCard
-            label="Occupied Beds"
-            value={d.beds.occupied}
-            icon={BedDouble}
-            color="blue"
-            badge={`${d.beds.occupancyRate}%`}
-            badgeColor="green"
-            progress={d.beds.occupancyRate}
-            progressLabel="Occupancy rate"
-          />
-          <StatCard
-            label="Vacant Beds"
-            value={d.beds.vacant}
-            icon={BedDouble}
-            color="green"
-            sub={d.beds.reserved > 0 ? `${d.beds.reserved} reserved` : 'Available now'}
-            badge={d.beds.reserved > 0 ? `${d.beds.reserved} reserved` : undefined}
-            badgeColor="amber"
-          />
-          <div className="col-span-2 lg:col-span-1">
-            <StatCard
-              label="Pending Rent"
-              value={fmt(d.financials.pendingRent)}
-              icon={Clock}
-              color="amber"
-              sub={`Expected: ${fmt(d.financials.expectedRent)}`}
-              badge={d.financials.breakdown?.overdue?.count > 0 ? `${d.financials.breakdown.overdue.count} overdue` : undefined}
-              badgeColor="red"
-            />
-          </div>
-        </div>
-      </div>
+      {/* Alerts */}
+      <AlertsSection financials={d.financials} beds={d.beds} navigate={navigate} />
 
-      {/* ── Over-Capacity Alert ── */}
-      {(d.rooms.overCapacity ?? 0) > 0 && (
-        <div>
-          <SectionLabel>Alerts</SectionLabel>
-          <div className="rounded-2xl border border-red-200 bg-gradient-to-r from-red-50 to-red-50/40 p-5 flex items-start gap-4">
-            <div className="h-10 w-10 shrink-0 rounded-xl bg-red-100 border border-red-200 flex items-center justify-center">
-              <AlertTriangle size={18} className="text-red-500" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-red-700">
-                {d.rooms.overCapacity} Over-Capacity Room{d.rooms.overCapacity > 1 ? 's' : ''}
-              </p>
-              <p className="text-xs text-red-600/80 mt-1 leading-relaxed">
-                {d.rooms.overCapacity > 1 ? 'These rooms have' : 'This room has'} more beds than stated capacity
-                {(d.rooms.overCapacityBeds ?? 0) > 0 && ` (${d.rooms.overCapacityBeds} extra bed${d.rooms.overCapacityBeds > 1 ? 's' : ''})`}.
-                Review extra beds or update the room capacity.
-              </p>
-            </div>
-            <a href="/rooms"
-              className="shrink-0 flex items-center gap-1 rounded-xl border border-red-200 bg-white/60 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-white hover:border-red-300 transition-all duration-150">
-              View <ChevronRight size={12} />
-            </a>
-          </div>
-        </div>
-      )}
+      {/* Main two-column layout */}
+      <div className="grid gap-5 lg:grid-cols-5">
 
-      {/* ── Occupancy Overview + Rent Collection ── */}
-      <div>
-        <SectionLabel>Occupancy & Collection</SectionLabel>
-        <div className="grid gap-4 lg:grid-cols-2">
+        {/* Left — Financial + Activity */}
+        <div className="lg:col-span-3 space-y-5">
+          <FinancialSummaryCard financials={d.financials} period={period} navigate={navigate} />
+          <RecentActivityCard activity={activity} loading={activityLoading} navigate={navigate} />
+        </div>
+
+        {/* Right — Occupancy + Tenants */}
+        <div className="lg:col-span-2 space-y-5">
           <OccupancyCard beds={d.beds} />
-          <RentCollectionCard financials={d.financials} />
-        </div>
-      </div>
-
-      {/* ── Rent Payments Table ── */}
-      <div>
-        <SectionLabel>Rent Payments — {period}</SectionLabel>
-        {isAllProperties ? (
-          <div className="card p-6 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-slate-600">Detailed payment records</p>
-              <p className="text-xs text-slate-400 mt-0.5">Select a single property to view individual tenant payments.</p>
-            </div>
-            <ChevronRight size={16} className="text-slate-300 shrink-0" />
-          </div>
-        ) : (
-          <RentTable rents={recentRents} loading={rentsLoading} period={period} />
-        )}
-      </div>
-
-      {/* ── Financial Banner ── */}
-      <div>
-        <SectionLabel>Financial Summary</SectionLabel>
-        <FinancialBanner financials={d.financials} period={period} />
-      </div>
-
-      {/* ── Expenses + Tenant Activity ── */}
-      <div>
-        <SectionLabel>Details</SectionLabel>
-        <div className="grid gap-4 lg:grid-cols-3 items-start">
-          <div className="lg:col-span-2">
-            <ExpenseCard expenses={d.expenses} />
-          </div>
-          <TenantActivityCard tenants={d.tenants} financials={d.financials} deposits={d.deposits} />
-        </div>
-      </div>
-
-      {/* ── Vacant Beds Widget ── */}
-      <div>
-        <SectionLabel>Availability</SectionLabel>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <VacantBedsWidget beds={d.beds} />
-          {/* New check-ins mini card */}
-          <div className="card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <p className="text-sm font-semibold text-slate-700">New Check-ins</p>
-              <div className="h-9 w-9 rounded-xl bg-blue-50 flex items-center justify-center">
-                <TrendingUp size={16} className="text-blue-500" />
-              </div>
-            </div>
-            <div className="flex items-end gap-2 mb-3">
-              <p className="text-4xl font-bold text-slate-800 leading-none">{d.tenants.newCheckInsThisMonth}</p>
-              <p className="text-sm text-slate-400 mb-1">this month</p>
-            </div>
-            <div className="rounded-xl bg-blue-50 border border-blue-200 px-3.5 py-2.5">
-              <p className="text-xs text-blue-600 font-medium">
-                {d.tenants.active} active · {d.tenants.onNotice} on notice
-              </p>
-            </div>
-          </div>
-          {/* Monthly rent expected mini card */}
-          <div className="card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <p className="text-sm font-semibold text-slate-700">Expected Rent</p>
-              <div className="h-9 w-9 rounded-xl bg-primary-50 flex items-center justify-center">
-                <CreditCard size={16} className="text-primary-500" />
-              </div>
-            </div>
-            <div className="flex items-end gap-2 mb-3">
-              <p className="text-2xl font-bold text-slate-800 leading-none">{fmt(d.financials.expectedRent)}</p>
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-slate-500">Collected</span>
-                <span className="font-semibold text-emerald-600">{fmt(d.financials.collectedRent)}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-slate-500">Pending</span>
-                <span className="font-semibold text-amber-600">{fmt(d.financials.pendingRent)}</span>
-              </div>
-            </div>
-          </div>
+          <TenantSummaryCard tenants={d.tenants} navigate={navigate} />
         </div>
       </div>
 

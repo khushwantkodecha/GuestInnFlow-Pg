@@ -23,7 +23,6 @@ const Accounting  = lazy(() => import('./pages/Accounting'))
 const Reports    = lazy(() => import('./pages/Reports'))
 const Settings   = lazy(() => import('./pages/Settings'))
 const Invoices   = lazy(() => import('./pages/Invoices'))
-const Reminders  = lazy(() => import('./pages/Reminders'))
 const Billing    = lazy(() => import('./pages/Billing'))
 
 const ProtectedRoute = ({ children }) => {
@@ -53,7 +52,6 @@ const AppRoutes = () => (
       <Route path="/expenses"    element={<Suspense fallback={<Spinner />}><Expenses /></Suspense>} />
       <Route path="/accounting" element={<Suspense fallback={<Spinner />}><Accounting /></Suspense>} />
       <Route path="/invoices"   element={<Suspense fallback={<Spinner />}><Invoices /></Suspense>} />
-      <Route path="/reminders"  element={<Suspense fallback={<Spinner />}><Reminders /></Suspense>} />
       <Route path="/billing"    element={<Suspense fallback={<Spinner />}><Billing /></Suspense>} />
       <Route path="/reports"     element={<Suspense fallback={<Spinner />}><Reports /></Suspense>} />
       <Route path="/settings"    element={<Suspense fallback={<Spinner />}><Settings /></Suspense>} />

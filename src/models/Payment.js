@@ -31,7 +31,7 @@ const paymentSchema = new mongoose.Schema(
     },
     method: {
       type: String,
-      enum: ['cash', 'upi', 'bank_transfer', 'cheque', 'other'],
+      enum: ['cash', 'upi', 'bank_transfer', 'cheque', 'deposit_adjustment'],
       default: 'cash',
     },
     referenceId: {
@@ -98,7 +98,6 @@ const paymentSchema = new mongoose.Schema(
     idempotencyKey: {
       type: String,
       trim: true,
-      default: null,
     },
     // ── Reversal ───────────────────────────────────────────────────────────────
     reversed: {

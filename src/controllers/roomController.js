@@ -12,7 +12,7 @@ const CAPACITY_MAP = { single: 1, double: 2, triple: 3 };
 
 // ── Enum guard sets (defensive fallback if Zod is bypassed) ──────────────────
 const VALID_TYPES      = new Set(['single', 'double', 'triple', 'dormitory']);
-const VALID_RENT_TYPES = new Set(['per_bed', 'per_room']);
+const VALID_RENT_TYPES = new Set(['per_bed']);
 const VALID_GENDERS    = new Set(['male', 'female', 'unisex']);
 const VALID_STATUSES   = new Set(['available', 'maintenance', 'blocked']);
 const VALID_CATEGORIES = new Set(['standard', 'premium', 'luxury']);
@@ -255,19 +255,6 @@ const updateRoom = asyncHandler(async (req, res) => {
     return res.status(200).json({ success: true, data: current, message: 'No changes made' });
   }
 
-  // rentType change guard
-  if (changedFields.includes('rentType')) {
-    const occupiedCount = await Bed.countDocuments({ room: req.params.id, isActive: true, status: 'occupied' });
-    if (occupiedCount > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot change rent type while ${occupiedCount} tenant${occupiedCount > 1 ? 's are' : ' is'} assigned. Vacate all tenants first.`,
-        code:    'RENT_TYPE_LOCKED',
-        meta:    { occupiedBeds: occupiedCount },
-      });
-    }
-  }
-
   // Deactivation guard
   if (changedFields.includes('isActive') && updateBody.isActive === false) {
     const [occupiedCount, extraActiveCount] = await Promise.all([
@@ -359,18 +346,12 @@ const updateRoom = asyncHandler(async (req, res) => {
     }
   }
 
-  // ── baseRent / rentType change → recalculate all occupied tenants ───────────
+  // ── baseRent change → recalculate all occupied tenants ──────────────────────
   // Fire-and-forget: recalculation is best-effort and must not block the response.
-  // For per_room rooms: each tenant's share is updated (floor(baseRent / normalOccupied)).
-  // For per_bed rooms: each tenant pays the new baseRent directly (unless overridden).
-  // rentType change only reaches here when occupiedCount === 0 (blocked above otherwise),
-  // so this recalc is a safety net that is always a no-op in practice — but it keeps
-  // the trigger surface complete per Rule 3.
-  if (changedFields.includes('baseRent') || changedFields.includes('rentType')) {
+  if (changedFields.includes('baseRent')) {
     const traceId = crypto.randomUUID();
-    const reason  = changedFields.includes('baseRent') ? 'base_rent_update' : 'rent_type_update';
-    recalculateRoomRent(room, null, reason, traceId)
-      .catch((err) => logger.error('room.rentConfig.recalc_failed', { roomId: room._id, traceId, reason, error: err.message }));
+    recalculateRoomRent(room, null, 'base_rent_update', traceId)
+      .catch((err) => logger.error('room.rentConfig.recalc_failed', { roomId: room._id, traceId, error: err.message }));
   }
 
   logger.info('room.updated', { roomId: room._id, changes: changedFields, userId: req.user._id });
