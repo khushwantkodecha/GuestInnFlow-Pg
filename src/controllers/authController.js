@@ -10,26 +10,55 @@ const signToken = (id) =>
 // POST /api/auth/register
 const register = asyncHandler(async (req, res) => {
   const { name, email, password, phone } = req.body;
-  const user = await User.create({ name, email, password, phone });
+  await User.create({ name, email, password, phone });
 
-  const token = signToken(user._id);
-  res.status(201).json({ success: true, token, data: { id: user._id, name: user.name, email: user.email } });
+  res.status(201).json({
+    success: true,
+    pending: true,
+    message: 'Account created. Contact the product owner to activate your account.',
+  });
 });
 
 // POST /api/auth/login
 const login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ success: false, message: 'Email and password are required' });
+  const { identifier, password } = req.body;
+  if (!identifier || !password) {
+    return res.status(400).json({ success: false, message: 'Email/mobile and password are required' });
   }
 
-  const user = await User.findOne({ email }).select('+password');
-  if (!user || !(await user.comparePassword(password))) {
-    return res.status(401).json({ success: false, message: 'Invalid credentials' });
+  const isEmail = identifier.includes('@');
+  let query;
+  if (isEmail) {
+    query = { email: identifier.toLowerCase().trim() };
+  } else {
+    // Accept plain digits (e.g. "9876543210") or full international ("+919876543210")
+    const id = identifier.trim();
+    const phones = id.startsWith('+') ? [id] : [id, `+91${id}`];
+    query = { phone: { $in: phones } };
+  }
+
+  const user = await User.findOne(query).select('+password');
+  if (!user) {
+    const code    = isEmail ? 'EMAIL_NOT_FOUND' : 'PHONE_NOT_FOUND';
+    const message = isEmail
+      ? 'No account found with this email address.'
+      : 'No account found with this mobile number.';
+    return res.status(401).json({ success: false, code, message });
+  }
+  if (!(await user.comparePassword(password))) {
+    return res.status(401).json({ success: false, code: 'WRONG_PASSWORD', message: 'Incorrect password. Please try again.' });
+  }
+
+  if (!user.isActive) {
+    return res.status(403).json({
+      success: false,
+      code:    'ACCOUNT_INACTIVE',
+      message: 'Your account is pending activation. Contact the product owner to enable your account.',
+    });
   }
 
   const token = signToken(user._id);
-  res.json({ success: true, token, data: { id: user._id, name: user.name, email: user.email } });
+  res.json({ success: true, token, data: { id: user._id, name: user.name, email: user.email, phone: user.phone, plan: user.plan } });
 });
 
 // GET /api/auth/me
@@ -45,17 +74,42 @@ const updateMe = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Name cannot be empty' });
   }
 
-  if (phone && !/^\d{10}$/.test(phone.trim())) {
-    return res.status(400).json({ success: false, message: 'Phone must be exactly 10 digits' });
+  if (!phone || !/^(\+\d{7,15}|\d{10})$/.test(phone.trim())) {
+    return res.status(400).json({ success: false, message: 'Enter a valid mobile number' });
   }
 
   const updated = await User.findByIdAndUpdate(
     req.user._id,
-    { name: name.trim(), phone: phone ? phone.trim() : undefined },
+    { name: name.trim(), phone: phone.trim() },
     { new: true, runValidators: true }
   );
 
   res.json({ success: true, data: updated });
 });
 
-module.exports = { register, login, getMe, updateMe };
+// PUT /api/auth/password
+const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ success: false, message: 'Current and new password are required' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'New password must be at least 6 characters' });
+  }
+  if (currentPassword === newPassword) {
+    return res.status(400).json({ success: false, message: 'New password must be different from the current one' });
+  }
+
+  const user = await User.findById(req.user._id).select('+password');
+  if (!(await user.comparePassword(currentPassword))) {
+    return res.status(401).json({ success: false, code: 'WRONG_CURRENT_PASSWORD', message: 'Current password is incorrect.' });
+  }
+
+  user.password = newPassword;
+  await user.save({ validateModifiedOnly: true });
+
+  res.json({ success: true, message: 'Password updated successfully.' });
+});
+
+module.exports = { register, login, getMe, updateMe, changePassword };

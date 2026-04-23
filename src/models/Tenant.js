@@ -170,9 +170,10 @@ const tenantSchema = new mongoose.Schema(
     ],
     status: {
       type: String,
-      // 'reserved' = bed held, not yet moved in (was 'lead')
-      enum: ['active', 'vacated', 'notice', 'merged', 'reserved'],
-      default: 'active',
+      // 'incomplete' = created but no bed assigned yet — awaiting bed assignment to activate
+      // 'reserved'   = bed held, not yet moved in (was 'lead')
+      enum: ['active', 'vacated', 'notice', 'merged', 'reserved', 'incomplete'],
+      default: 'incomplete',
     },
     // Set when this tenant record was absorbed into another via the merge flow.
     mergedInto: {
@@ -208,7 +209,7 @@ tenantSchema.index(
   { property: 1, phone: 1 },
   {
     unique: true,
-    partialFilterExpression: { status: { $in: ['active', 'notice', 'reserved'] } },
+    partialFilterExpression: { status: { $in: ['active', 'notice', 'reserved', 'incomplete'] } },
     name: 'unique_active_phone_per_property',
   }
 );
@@ -243,6 +244,14 @@ tenantSchema.add({
 
 // Recompute profileStatus on every save.
 tenantSchema.pre('save', function (next) {
+  // Enforce: no bed → status must be 'incomplete' (guard against manual API writes or
+  // any future flow that clears bed without going through the vacate path).
+  // Does not apply to already-terminal statuses (vacated, merged) or reserved (bed is
+  // the bed they're waiting to move into).
+  if (!this.bed && (this.status === 'active' || this.status === 'notice')) {
+    this.status = 'incomplete';
+  }
+
   // Keep idProofUploaded in sync with documents.idProofUrl
   if (this.documents?.idProofUrl) this.idProofUploaded = true;
   this.profileStatus = PROFILE_FIELDS.every(f => f.check(this)) ? 'complete' : 'incomplete';

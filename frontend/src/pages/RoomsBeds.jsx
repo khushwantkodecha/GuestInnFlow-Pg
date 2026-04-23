@@ -1659,21 +1659,22 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
   }
 
   const baseRent = room.baseRent ?? room.rent ?? 0
-  // Occupied: tenant.rentAmount is the ONLY source of truth (locked at assignment).
-  // billingSnapshot.finalRent is a safety fallback if rentAmount is somehow missing.
-  // Non-occupied extra: routed through calculateRent so the engine stays the
-  //   single source — no inline duplication of isChargeable/extraCharge logic.
-  // Non-occupied normal: show baseRent as an estimate (no locked value exists yet).
-  const displayRent = bed.status === 'occupied'
-    ? (bed.tenant?.rentAmount ?? bed.tenant?.billingSnapshot?.finalRent ?? baseRent)
-    : bed.isExtra
-      ? calculateRent({
-          room: { baseRent, rentType: room.rentType },
-          bed,
-          normalOccupied: 0,
-        }).finalRent
-      : (bed.rentOverride || baseRent)
-  const hasCustomRent = !bed.isExtra && bed.rentOverride && bed.rentOverride !== baseRent
+  // System-defined bed price — always room.baseRent for normal beds.
+  // bed.rentOverride is written at tenant assignment time and never cleared on vacate,
+  // so it is a tenant-assignment artifact, not a system price.
+  const displayRent = bed.isExtra
+    ? calculateRent({
+        room: { baseRent, rentType: room.rentType },
+        bed,
+        normalOccupied: 0,
+      }).finalRent
+    : baseRent
+  // Custom rent in effect: current tenant's locked rate (occupied) or persisted
+  // assignment-time override (vacant). null when it matches the system price.
+  const overrideRent = bed.isExtra ? null
+    : bed.status === 'occupied'
+      ? (bed.tenant?.rentAmount != null && bed.tenant.rentAmount !== baseRent ? bed.tenant.rentAmount : null)
+      : (bed.rentOverride && bed.rentOverride !== baseRent ? bed.rentOverride : null)
   const TITLES = {
     actions:        `Room ${room.roomNumber} • Bed ${bed.bedNumber}`,
     assign:         `Assign Tenant — Bed ${bed.bedNumber}`,
@@ -1907,55 +1908,20 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                 </span>
                 <span className="text-xs text-slate-400">/mo</span>
               </div>
-              {bed.status === 'occupied' && bed.tenant?.billingSnapshot ? (() => {
-                const snap = bed.tenant.billingSnapshot
-                if (snap.isExtra) {
-                  return (
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      {!snap.isChargeable
-                        ? 'Extra Bed · Free'
-                        : snap.extraCharge > 0
-                          ? 'Extra Bed · Fixed charge'
-                          : 'Extra Bed · Uses room base rent'}
-                    </p>
-                  )
-                }
-                if (snap.overrideApplied) {
-                  return (
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      Override · Base ₹{snap.baseRent?.toLocaleString('en-IN')}
-                    </p>
-                  )
-                }
-                return (
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    Per Bed · Fixed
-                  </p>
-                )
-              })() : bed.status === 'vacant' ? (() => {
-                if (bed.isExtra) {
-                  return (
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      {!bed.isChargeable ? 'Extra Bed · Free' : bed.extraCharge > 0 ? 'Extra Bed · Fixed charge' : 'Extra Bed · Uses room base rent'}
-                    </p>
-                  )
-                }
-                if (hasCustomRent) {
-                  return <p className="text-[10px] text-slate-400 mt-0.5">Custom override · Locked at assignment</p>
-                }
-                return <p className="text-[10px] text-slate-400 mt-0.5">Per Bed · Locked at assignment</p>
-              })() : (
+              {bed.isExtra ? (
                 <p className="text-[10px] text-slate-400 mt-0.5">
-                  {bed.isExtra
-                    ? (!bed.isChargeable
-                        ? 'Extra Bed · Free'
-                        : bed.extraCharge > 0
-                          ? 'Extra Bed · Fixed charge'
-                          : 'Extra Bed · Uses room base rent')
-                    : hasCustomRent
-                      ? 'Custom override'
-                      : 'Per Bed · Fixed'}
+                  {!bed.isChargeable
+                    ? 'Extra Bed · Free'
+                    : bed.extraCharge > 0
+                      ? 'Extra Bed · Fixed charge'
+                      : 'Extra Bed · Uses room base rent'}
                 </p>
+              ) : overrideRent !== null ? (
+                <p className="text-[10px] text-amber-500 mt-0.5">
+                  {bed.status === 'occupied' ? 'Tenant' : 'Last tenant'} pays ₹{overrideRent.toLocaleString('en-IN')} (custom override)
+                </p>
+              ) : (
+                <p className="text-[10px] text-slate-400 mt-0.5">Per Bed · Fixed</p>
               )}
             </div>
           </div>
@@ -2880,7 +2846,27 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                   assignable
                   reservedBedId={bed.status === 'reserved' ? bed._id : null}
                   selectedId={selectedTenantId}
-                  onSelect={t => { setSelectedTenantId(t._id); setSelectedTenantObj(t) }}
+                  onSelect={async t => {
+                    setSelectedTenantId(t._id)
+                    setSelectedTenantObj(t)
+                    // For incomplete tenants, fetch the full profile to pre-fill saved values
+                    if (t.status === 'incomplete') {
+                      try {
+                        const res = await getTenant(propertyId, t._id)
+                        const full = res.data?.data ?? t
+                        setSelectedTenantObj(full)
+                        if (full.checkInDate)
+                          setMoveInDate(new Date(full.checkInDate).toISOString().split('T')[0])
+                        if ((full.rentAmount ?? 0) > 0)
+                          setRentOverride(String(full.rentAmount))
+                        if ((full.depositAmount ?? 0) > 0) {
+                          setDepositEnabled(true)
+                          setDepositInput(String(full.depositAmount))
+                          setDepositCollected(full.depositPaid === true)
+                        }
+                      } catch (_) { /* non-fatal: fields keep their defaults */ }
+                    }
+                  }}
                   onAddNew={q => {
                     setAssignMode('create')
                     setSelectedTenantId(''); setSelectedTenantObj(null)
@@ -3153,33 +3139,41 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
 
           {/* ── Assignment Preview Card — shown once tenant is selected ── */}
           {selectedTenant && assignMode === 'list' && (
-            <div data-testid="assignment-preview-card" className="rounded-2xl border border-primary-200 bg-gradient-to-br from-primary-50 to-white p-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-full bg-primary-600 flex items-center justify-center shrink-0">
-                  <span className="text-sm font-bold text-white">{selectedTenant.name?.slice(0, 2).toUpperCase()}</span>
+            <div className="space-y-2">
+              <div data-testid="assignment-preview-card" className="rounded-2xl border border-primary-200 bg-gradient-to-br from-primary-50 to-white p-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-primary-600 flex items-center justify-center shrink-0">
+                    <span className="text-sm font-bold text-white">{selectedTenant.name?.slice(0, 2).toUpperCase()}</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-800 truncate">{selectedTenant.name}</p>
+                    <p className="text-[11px] text-slate-400">{selectedTenant.phone}</p>
+                  </div>
+                  {(selectedTenantId || selectedTenant?._id) ? (
+                    <button type="button" onClick={() => {
+                      setNewName(selectedTenant.name ?? '')
+                      setNewPhone(selectedTenant.phone ?? '')
+                      setPhoneConflict(null)
+                      setAssignMode('edit')
+                    }} className="text-[10px] font-semibold text-primary-600 hover:text-primary-700 transition-colors shrink-0">
+                      Edit
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => {
+                      setSelectedTenantObj(null)
+                      setSearchResetKey(k => k + 1)
+                    }} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600 transition-colors shrink-0">
+                      Change
+                    </button>
+                  )}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-slate-800 truncate">{selectedTenant.name}</p>
-                  <p className="text-[11px] text-slate-400">{selectedTenant.phone}</p>
-                </div>
-                {(selectedTenantId || selectedTenant?._id) ? (
-                  <button type="button" onClick={() => {
-                    setNewName(selectedTenant.name ?? '')
-                    setNewPhone(selectedTenant.phone ?? '')
-                    setPhoneConflict(null)
-                    setAssignMode('edit')
-                  }} className="text-[10px] font-semibold text-primary-600 hover:text-primary-700 transition-colors shrink-0">
-                    Edit
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => {
-                    setSelectedTenantObj(null)
-                    setSearchResetKey(k => k + 1)
-                  }} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600 transition-colors shrink-0">
-                    Change
-                  </button>
-                )}
               </div>
+              {selectedTenant.status === 'incomplete' && (
+                <div className="flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2">
+                  <AlertTriangle size={12} className="text-amber-500 shrink-0" />
+                  <p className="text-[11px] font-semibold text-amber-700">Incomplete setup — details pre-filled from saved profile</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -4720,10 +4714,12 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
         const targetRoom   = otherRooms.find(r => r._id === targetRoomId) ?? null
         const vacantBeds   = allTargetBeds.filter(b => b.status === 'vacant')
 
-        const tenantName   = bed.tenant?.name ?? 'Tenant'
-        const tenantGender = bed.tenant?.gender
-        const currentRent  = bed.tenant?.rentAmount ?? 0
-        const sameRoom     = targetRoomId === room._id
+        const tenantName    = bed.tenant?.name ?? 'Tenant'
+        const tenantGender  = bed.tenant?.gender
+        const currentRent   = bed.tenant?.rentAmount ?? 0
+        const sameRoom      = targetRoomId === room._id
+        const ledgerBalance = bed.tenant?.ledgerBalance ?? 0
+        // ledgerBalance: positive = tenant owes money, negative = advance/overpayment credit
 
         // Gender mismatch: target room has explicit gender that doesn't match tenant
         const genderMismatch = targetRoom &&
@@ -4733,8 +4729,28 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
 
         const canConfirm = !!selectedBedId && !genderMismatch && !submitting
 
+        // ── After-move financial preview ─────────────────────────────────────────
+        // Fresh-cycle model: old rent is closed, new rent starts from scratch.
+        //   advance      = pure credit the tenant holds (negative ledger balance)
+        //   advanceApplied = min(advance, newRent) — capped at new rent
+        //   remainingAdv = leftover credit after application
+        //   finalDue     = newRent − advance  (what tenant still owes after applying credit)
+        const newRent        = crRentPreview?.finalRent ?? (selectedBedId && targetRoom ? targetRoom.baseRent : null)
+        const advance        = ledgerBalance < 0 ? Math.abs(ledgerBalance) : 0
+        const advanceApplied = newRent != null ? Math.min(advance, newRent) : 0
+        const remainingAdv   = advance - advanceApplied
+        const finalDue       = newRent != null ? Math.max(0, newRent - advance) : null
+
         return (
         <div className="space-y-4">
+
+          {/* ── Billing reset warning ── */}
+          <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-3">
+            <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-800 font-medium leading-relaxed">
+              Changing room will <span className="font-bold">reset billing</span> and recalculate dues for the current cycle.
+            </p>
+          </div>
 
           {/* ── Tenant identity card ── */}
           <div className="flex items-center gap-3.5 rounded-2xl border border-slate-100 bg-gradient-to-r from-slate-50/80 to-white px-4 py-3.5 shadow-sm">
@@ -4890,65 +4906,83 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                     Fixed — ₹{targetRoom.baseRent?.toLocaleString('en-IN')} per bed
                   </p>
                 )}
+                <div className="flex items-center gap-1.5 pt-0.5">
+                  <span className="h-1 w-1 rounded-full bg-slate-300 shrink-0" />
+                  <p className="text-[10px] text-slate-400">New rent applies from today · Previous billing cycle will be closed</p>
+                </div>
               </div>
             </div>
           )}
 
-          {/* ── Deposit info — carried over without comparison (no room-level requirement) ── */}
+          {/* ── Deposit info — clarified: carried over, not used for rent ── */}
           {selectedBedId && !genderMismatch && (() => {
             const depositBal  = bed.tenant?.depositBalance ?? bed.tenant?.depositAmount ?? 0
             const depositPaid = bed.tenant?.depositPaid ?? false
             if (!depositPaid && depositBal === 0) return null
             return (
-              <div className="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3">
-                <IndianRupee size={13} className="text-slate-400 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-slate-700 tabular-nums">₹{depositBal.toLocaleString('en-IN')}</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Deposit carried over to new room</p>
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100 shrink-0">
+                  <IndianRupee size={13} className="text-slate-400" />
                 </div>
-                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-0.5 shrink-0">
-                  Carried over
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-slate-700 tabular-nums">Security Deposit ₹{depositBal.toLocaleString('en-IN')}</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Carried over · <span className="font-semibold text-slate-500">Not used for rent</span></p>
+                </div>
+                <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-0.5 shrink-0">
+                  Held
                 </span>
               </div>
             )
           })()}
 
 
-          {/* ── Transfer summary + action ── */}
-          {canConfirm && (() => {
+          {/* ── After Move Summary ── */}
+          {canConfirm && newRent != null && (() => {
             const selectedBed = vacantBeds.find(b => b._id === selectedBedId)
-            const newRent     = crRentPreview?.finalRent
-            const depositBal  = bed.tenant?.depositBalance ?? bed.tenant?.depositAmount ?? 0
-            const depositPaid = bed.tenant?.depositPaid ?? false
             return (
               <div className="rounded-xl border border-primary-200 bg-primary-50/40 overflow-hidden">
-                <div className="px-4 py-3 space-y-2.5">
-                  {/* From → To */}
+                {/* From → To header */}
+                <div className="flex items-center gap-2 px-4 py-2.5 bg-primary-50 border-b border-primary-100">
+                  <ArrowRightLeft size={12} className="text-primary-500" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-primary-600">After Move Summary</span>
+                </div>
+                <div className="px-4 py-3 space-y-3">
+                  {/* Room transfer line */}
                   <div className="flex items-center gap-2 text-sm">
                     <div className="flex-1 min-w-0">
                       <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-0.5">From</p>
                       <p className="font-bold text-slate-700 truncate">Room {room.roomNumber} · Bed {bed.bedNumber}</p>
                     </div>
-                    <ArrowRightLeft size={14} className="text-primary-400 shrink-0" />
+                    <ArrowRightLeft size={13} className="text-primary-300 shrink-0" />
                     <div className="flex-1 min-w-0 text-right">
                       <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-0.5">To</p>
                       <p className="font-bold text-primary-700 truncate">Room {targetRoom.roomNumber} · Bed {selectedBed?.bedNumber}</p>
                     </div>
                   </div>
-                  {/* Financial impact */}
-                  <div className="flex gap-2">
-                    {newRent != null && (
-                      <div className="flex-1 rounded-lg bg-white border border-primary-100 px-3 py-2">
-                        <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider">New Rent</p>
-                        <p className="text-sm font-extrabold text-primary-700 tabular-nums mt-0.5">₹{newRent.toLocaleString('en-IN')}</p>
+                  {/* Financial breakdown */}
+                  <div className="rounded-lg bg-white border border-primary-100 divide-y divide-slate-50 overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2">
+                      <p className="text-xs text-slate-500">New Rent</p>
+                      <p className="text-sm font-bold text-slate-800 tabular-nums">₹{newRent.toLocaleString('en-IN')}</p>
+                    </div>
+                    {advanceApplied > 0 && (
+                      <div className="flex items-center justify-between px-3 py-2 bg-emerald-50/50">
+                        <p className="text-xs text-emerald-700">Advance Applied</p>
+                        <p className="text-sm font-bold text-emerald-700 tabular-nums">−₹{advanceApplied.toLocaleString('en-IN')}</p>
                       </div>
                     )}
-                    {(depositPaid || depositBal > 0) && (
-                      <div className="flex-1 rounded-lg bg-white border border-primary-100 px-3 py-2">
-                        <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider">Deposit</p>
-                        <p className="text-sm font-bold text-emerald-600 mt-0.5">₹{depositBal.toLocaleString('en-IN')} carried over</p>
+                    {remainingAdv > 0 && (
+                      <div className="flex items-center justify-between px-3 py-2">
+                        <p className="text-xs text-slate-400">Remaining Credit</p>
+                        <p className="text-sm font-semibold text-emerald-600 tabular-nums">₹{remainingAdv.toLocaleString('en-IN')}</p>
                       </div>
                     )}
+                    <div className="flex items-center justify-between px-3 py-2.5 bg-slate-50">
+                      <p className="text-xs font-bold text-slate-600">Final Due</p>
+                      <p className={`text-sm font-extrabold tabular-nums ${finalDue === 0 ? 'text-emerald-600' : 'text-slate-800'}`}>
+                        {finalDue === 0 ? 'Settled ✓' : `₹${finalDue.toLocaleString('en-IN')}`}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -7558,44 +7592,42 @@ const NoPropertyState = () => {
   ]
 
   return (
-    <div className="flex items-center justify-center px-4 py-12 min-h-[60vh]">
-      <div className="w-full max-w-xl">
+    <div className="px-4 py-8 pb-24 md:pb-8">
+      <div className="w-full max-w-lg mx-auto">
 
         {/* Hero */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center h-20 w-20 rounded-3xl mb-5 mx-auto"
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl mb-4 mx-auto"
             style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
-            <BedDouble size={36} style={{ color: '#60C3AD' }} />
+            <BedDouble size={28} style={{ color: '#60C3AD' }} />
           </div>
           <h2 className="text-xl font-bold text-slate-800">No property selected</h2>
           <p className="text-sm text-slate-400 mt-2 max-w-xs mx-auto leading-relaxed">
-            Select a property from the sidebar to manage its rooms and beds.
+            Select a property to manage its rooms and beds.
           </p>
         </div>
 
         {/* CTA */}
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-5">
-          <div className="px-5 py-4 flex items-center justify-between gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-4">
+          <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-800">No properties yet?</p>
               <p className="text-xs text-slate-400 mt-0.5">Create one first, then add rooms and beds</p>
             </div>
             <button
               onClick={() => navigate('/properties')}
-              className="shrink-0 inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+              className="w-full sm:w-auto shrink-0 inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}
             >
               <Building2 size={14} /> Add Property
             </button>
           </div>
           <div className="h-px bg-slate-100" />
-          <div className="px-5 py-3 bg-slate-50/60 flex items-center gap-2 text-xs text-slate-400">
-            <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm font-medium text-slate-600">
-              <Home size={10} className="text-emerald-500" />
-              Your property
-              <ChevronRight size={10} className="text-slate-300" />
-            </div>
-            <span>shows in the sidebar panel on the left</span>
+          <div className="px-5 py-3 bg-slate-50/60">
+            <p className="text-xs text-slate-400">
+              <span className="md:hidden">Already have a property? Switch from the <span className="font-semibold text-slate-500">More</span> tab below.</span>
+              <span className="hidden md:inline">Already have a property? Select it from the sidebar on the left.</span>
+            </p>
           </div>
         </div>
 

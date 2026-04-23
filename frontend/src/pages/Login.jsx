@@ -2,37 +2,89 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Building2, Eye, EyeOff, ArrowRight, CheckCircle2,
-  Shield,
-  Mail, KeyRound
+  Shield, Mail, Phone, KeyRound, AlertCircle, UserX,
 } from 'lucide-react'
 import { login } from '../api/auth'
 import { useAuth } from '../context/AuthContext'
 
 
 
+/* ── Error banner ─────────────────────────────────────────────────────────── */
+const ERROR_MAP = {
+  ACCOUNT_INACTIVE: {
+    title: 'Account not activated',
+    body:  'Contact the product owner to enable your account.',
+    bg: '#fffbeb', border: '#fde68a', title_color: '#92400e', body_color: '#b45309', icon_color: '#d97706',
+    Icon: AlertCircle,
+  },
+  EMAIL_NOT_FOUND: {
+    title: 'Email not found',
+    body:  'No account is registered with this email address.',
+    bg: '#fef2f2', border: '#fecaca', title_color: '#991b1b', body_color: '#b91c1c', icon_color: '#dc2626',
+    Icon: UserX,
+  },
+  PHONE_NOT_FOUND: {
+    title: 'Mobile number not found',
+    body:  'No account is registered with this mobile number.',
+    bg: '#fef2f2', border: '#fecaca', title_color: '#991b1b', body_color: '#b91c1c', icon_color: '#dc2626',
+    Icon: UserX,
+  },
+  WRONG_PASSWORD: {
+    title: 'Incorrect password',
+    body:  'The password you entered is incorrect. Please try again.',
+    bg: '#fef2f2', border: '#fecaca', title_color: '#991b1b', body_color: '#b91c1c', icon_color: '#dc2626',
+    Icon: AlertCircle,
+  },
+}
+
+const LoginErrorBanner = ({ code, msg }) => {
+  if (!msg) return null
+  const cfg = ERROR_MAP[code] ?? {
+    title: 'Sign in failed', body: msg,
+    bg: '#fef2f2', border: '#fecaca', title_color: '#991b1b', body_color: '#b91c1c', icon_color: '#dc2626',
+    Icon: AlertCircle,
+  }
+  const { Icon } = cfg
+  return (
+    <div className="mb-5 flex items-start gap-3 rounded-xl border px-4 py-3.5 animate-pageIn"
+      style={{ background: cfg.bg, borderColor: cfg.border }}>
+      <Icon size={16} className="mt-0.5 shrink-0" style={{ color: cfg.icon_color }} />
+      <div>
+        <p className="text-sm font-semibold" style={{ color: cfg.title_color }}>{cfg.title}</p>
+        <p className="text-xs mt-0.5 leading-relaxed" style={{ color: cfg.body_color }}>{cfg.body}</p>
+      </div>
+    </div>
+  )
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════ */
 const Login = () => {
   const { loginUser } = useAuth()
   const navigate = useNavigate()
 
-  const [form, setForm] = useState({ email: '', password: '' })
+  const [form,     setForm]     = useState({ identifier: '', password: '' })
   const [showPassword, setShowPassword] = useState(false)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [mounted, setMounted] = useState(false)
+  const [errorCode, setErrorCode] = useState('')
+  const [errorMsg,  setErrorMsg]  = useState('')
+  const [loading,   setLoading]   = useState(false)
+  const [mounted,   setMounted]   = useState(false)
 
   useEffect(() => { setMounted(true) }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    setError('')
+    setErrorCode('')
+    setErrorMsg('')
     setLoading(true)
     try {
       const res = await login(form)
       loginUser(res.data.token, res.data.data)
       navigate('/dashboard')
     } catch (err) {
-      setError(err.response?.data?.message || 'Login failed. Please try again.')
+      const code = err.response?.data?.code || ''
+      const msg  = err.response?.data?.message || 'Something went wrong. Please try again.'
+      setErrorCode(code)
+      setErrorMsg(msg)
     } finally {
       setLoading(false)
     }
@@ -65,7 +117,7 @@ const Login = () => {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm border border-white/20">
               <Building2 size={20} className="text-white" />
             </div>
-            <span className="text-white font-semibold text-lg tracking-tight">TenantInnFlow</span>
+            <span className="text-white font-semibold text-lg tracking-tight">DormAxis</span>
           </div>
         </div>
 
@@ -93,7 +145,7 @@ const Login = () => {
 
         {/* Footer */}
         <div className="relative z-10 px-12 pb-8">
-          <p className="text-[11px] text-white/40">© {new Date().getFullYear()} TenantInnFlow · All rights reserved</p>
+          <p className="text-[11px] text-white/40">© {new Date().getFullYear()} DormAxis · All rights reserved</p>
         </div>
       </div>
 
@@ -106,7 +158,7 @@ const Login = () => {
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-600">
               <Building2 size={18} className="text-white" />
             </div>
-            <span className="font-semibold text-gray-900">TenantInnFlow</span>
+            <span className="font-semibold text-gray-900">DormAxis</span>
           </div>
           <div className="hidden lg:block" />
         </div>
@@ -132,34 +184,28 @@ const Login = () => {
 
             {/* Card */}
             <div className="login-form-card">
-              {/* Error */}
-              {error && (
-                <div className="mb-5 flex items-start gap-3 rounded-xl bg-red-50 border border-red-100 px-4 py-3.5 text-sm text-red-700 animate-pageIn">
-                  <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-100">
-                    <span className="text-xs font-bold text-red-600">!</span>
-                  </div>
-                  <span>{error}</span>
-                </div>
-              )}
+              {/* Error banner */}
+              <LoginErrorBanner code={errorCode} msg={errorMsg} />
 
               <form onSubmit={handleSubmit} className="space-y-5" id="login-form">
 
-                {/* ── Email ── */}
+                {/* ── Identifier (email or mobile) ── */}
                 <div className="login-field-group">
-                  <label htmlFor="login-email" className="login-label">
+                  <label htmlFor="login-identifier" className="login-label">
                     <Mail size={14} className="text-gray-400" />
-                    Email address
+                    Email or Mobile Number
                   </label>
                   <input
-                    id="login-email"
-                    type="email"
+                    id="login-identifier"
+                    type="text"
                     className="login-input"
-                    placeholder="you@example.com"
-                    value={form.email}
-                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    style={errorCode === 'EMAIL_NOT_FOUND' || errorCode === 'PHONE_NOT_FOUND' ? { borderColor: '#f87171', background: '#fff' } : {}}
+                    placeholder="you@example.com or 9876543210"
+                    value={form.identifier}
+                    onChange={(e) => { setForm({ ...form, identifier: e.target.value }); setErrorCode(''); setErrorMsg('') }}
                     required
                     autoFocus
-                    autoComplete="email"
+                    autoComplete="username"
                   />
                 </div>
 
@@ -174,9 +220,10 @@ const Login = () => {
                       id="login-password"
                       type={showPassword ? 'text' : 'password'}
                       className="login-input pr-11"
+                      style={errorCode === 'WRONG_PASSWORD' ? { borderColor: '#f87171', background: '#fff' } : {}}
                       placeholder="••••••••"
                       value={form.password}
-                      onChange={(e) => setForm({ ...form, password: e.target.value })}
+                      onChange={(e) => { setForm({ ...form, password: e.target.value }); setErrorCode(''); setErrorMsg('') }}
                       required
                       autoComplete="current-password"
                     />

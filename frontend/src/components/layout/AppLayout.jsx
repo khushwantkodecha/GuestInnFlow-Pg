@@ -19,7 +19,7 @@ const TITLES = {
 
 const AppLayout = () => {
   const { pathname } = useLocation()
-  const title        = TITLES[pathname] ?? 'TenantInnFlow'
+  const title        = TITLES[pathname] ?? 'DormAxis'
 
   const [sidebarOpen,     setSidebarOpen]     = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)

@@ -1,13 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
-import { MapPin, Menu, Settings, ChevronRight } from 'lucide-react'
-import { useAuth } from '../../context/AuthContext'
-import { useProperty } from '../../context/PropertyContext'
+import { Menu, Settings, ChevronRight } from 'lucide-react'
+import { useAuth }     from '../../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
 
 const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
-  const { user }             = useAuth()
-  const { selectedProperty } = useProperty()
-  const navigate             = useNavigate()
+  const { user }   = useAuth()
+  const navigate   = useNavigate()
 
   const [showUserMenu, setShowUserMenu] = useState(false)
   const menuRef = useRef(null)
@@ -47,23 +45,9 @@ const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
         <h1 className="text-base font-bold text-slate-800 tracking-tight">{title}</h1>
       </div>
 
-      {/* Centre: active property pill */}
-      {selectedProperty && (
-        <div className="absolute left-1/2 -translate-x-1/2 hidden sm:flex items-center gap-1.5 rounded-full px-3.5 py-1.5 bg-primary-50 border border-primary-100">
-          <MapPin size={12} className="text-primary-500 shrink-0" />
-          <span className="text-xs font-semibold text-primary-600 max-w-[160px] truncate">
-            {selectedProperty.name}
-          </span>
-        </div>
-      )}
 
-      {/* Right */}
+{/* Right */}
       <div className="flex items-center gap-2 sm:gap-3">
-        {/* User info */}
-        <div className="text-right hidden lg:block">
-          <p className="text-sm font-medium text-slate-700 leading-tight">{user?.name}</p>
-          <p className="text-xs text-slate-500">{user?.email}</p>
-        </div>
 
         {/* Avatar + dropdown */}
         <div className="relative" ref={menuRef}>

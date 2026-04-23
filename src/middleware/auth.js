@@ -16,6 +16,13 @@ const protect = async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
+    if (!req.user.isActive) {
+      return res.status(403).json({
+        success: false,
+        code:    'ACCOUNT_INACTIVE',
+        message: 'Your account is inactive. Contact the product owner to enable your account.',
+      });
+    }
     next();
   } catch {
     return res.status(401).json({ success: false, message: 'Token invalid or expired' });

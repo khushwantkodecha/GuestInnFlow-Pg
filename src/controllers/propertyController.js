@@ -7,6 +7,7 @@ const Expense           = require('../models/Expense');
 const PropertyAuditLog  = require('../models/PropertyAuditLog');
 const asyncHandler      = require('../utils/asyncHandler');
 const rentService       = require('../services/rentService');
+const PLANS             = require('../config/plans');
 
 // ── Audit helper ──────────────────────────────────────────────────────────────
 // Computes a diff between two plain objects (only the top-level editable fields).
@@ -308,6 +309,21 @@ const getPropertyAnalytics = asyncHandler(async (req, res) => {
 
 // POST /api/properties
 const createProperty = asyncHandler(async (req, res) => {
+  const planKey  = req.user.plan ?? 'standard';
+  const planConf = PLANS[planKey];
+
+  if (planConf.maxProperties !== Infinity) {
+    const activeCount = await Property.countDocuments({ owner: req.user._id, isActive: true });
+    if (activeCount >= planConf.maxProperties) {
+      const limit = planConf.maxProperties;
+      return res.status(403).json({
+        success: false,
+        code:    'PLAN_LIMIT_REACHED',
+        message: `Your ${planConf.name} plan allows up to ${limit} propert${limit === 1 ? 'y' : 'ies'}. Upgrade your plan to add more.`,
+      });
+    }
+  }
+
   const property = await Property.create({ ...req.body, owner: req.user._id });
   res.status(201).json({ success: true, data: property });
 });

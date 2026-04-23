@@ -74,7 +74,7 @@ const rentPaymentSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ['cash', 'upi', 'bank_transfer', 'cheque'],
+      enum: ['cash', 'upi', 'bank_transfer', 'cheque', 'deposit_adjustment'],
       default: null,
     },
     notes: {

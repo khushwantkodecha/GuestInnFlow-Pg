@@ -9,11 +9,25 @@ import { useNavigate } from 'react-router-dom'
 import { getPropertyDashboard, getRecentActivity } from '../api/dashboard'
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
+import { useAuth } from '../context/AuthContext'
 import Spinner from '../components/ui/Spinner'
 import { DashboardSkeleton } from '../components/ui/Skeleton'
 
+const useGreeting = () => {
+  const [now, setNow] = useState(new Date())
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+  const h = now.getHours()
+  const greeting = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
+  const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+  const date = now.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })
+  return { greeting, time, date }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const fmt     = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
+const fmt     = (n) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 const pct     = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0)
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'
 
@@ -25,7 +39,7 @@ const METHOD_LABELS = {
 }
 
 // ── Donut chart ───────────────────────────────────────────────────────────────
-const DonutChart = ({ occupied, reserved, vacant, total }) => {
+const DonutChart = ({ occupied, reserved, total }) => {
   if (!total) return (
     <div className="relative h-28 w-28 shrink-0 flex items-center justify-center rounded-full bg-slate-100">
       <p className="text-[11px] text-slate-400 text-center leading-tight">No<br/>beds</p>
@@ -79,34 +93,82 @@ const AlertsSection = ({ financials, beds, navigate }) => {
   const overdueAmt     = financials.breakdown?.overdue?.amount ?? 0
   const pendingCount   = financials.breakdown?.pending?.count  ?? 0
   const pendingAmt     = financials.breakdown?.pending?.amount ?? 0
-  const totalDueCount  = overdueCount + pendingCount
-  const totalDueAmount = overdueAmt + pendingAmt
+  const hasRentRecords = financials.hasRentRecords ?? false
 
   const { status: bedStatus, total: totalBeds, occupied: occupiedBeds,
           extraOccupants = 0, vacant: vacantBeds = 0 } = beds
 
-  const hasIssues = totalDueCount > 0 || bedStatus === 'over_capacity' || bedStatus === 'invalid_state'
+  // Use explicit backend flag — do not infer from count combinations
+  const noRentGenerated = occupiedBeds > 0 && !hasRentRecords
+
+  const lowOccupancy = totalBeds >= 4
+    && occupiedBeds > 0
+    && (occupiedBeds / totalBeds) < 0.5
+
+  const hasIssues = overdueCount > 0
+    || bedStatus === 'over_capacity'
+    || bedStatus === 'invalid_state'
+    || occupiedBeds === 0
+    || totalBeds === 0
+    || noRentGenerated
+
+  // Only pending is suppressed in overdue mode — all other cards remain
+  const overdueMode = overdueCount > 0
 
   if (!hasIssues) return (
     <div className="space-y-2">
       <div className="flex items-center gap-2.5 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
         <span className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
-        <p className="text-[12px] font-medium text-emerald-700">No issues — everything looks good</p>
+        <p className="text-[12px] font-medium text-emerald-700">All rents collected · operations normal</p>
       </div>
-      {vacantBeds > 0 && (
+      {/* Single insight in all-clear path: low occupancy takes priority over vacant */}
+      {lowOccupancy ? (
+        <div className="flex items-center gap-2.5 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3">
+          <BedDouble size={13} className="text-slate-400 shrink-0" />
+          <p className="text-[12px] font-medium text-slate-500">
+            Low occupancy — {vacantBeds} {vacantBeds === 1 ? 'bed' : 'beds'} still vacant
+          </p>
+        </div>
+      ) : vacantBeds > 0 ? (
         <div className="flex items-center gap-2.5 rounded-xl bg-blue-50 border border-blue-100 px-4 py-3">
           <BedDouble size={13} className="text-blue-400 shrink-0" />
           <p className="text-[12px] font-medium text-blue-600">
-            {vacantBeds} bed{vacantBeds !== 1 ? 's' : ''} available across this property
+            {vacantBeds} bed{vacantBeds !== 1 ? 's' : ''} available
           </p>
         </div>
-      )}
+      ) : null}
+    </div>
+  )
+
+  // Isolated path: no beds configured — show nothing else
+  if (totalBeds === 0 && bedStatus !== 'invalid_state') return (
+    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5">
+      <BedDouble size={15} className="text-slate-400 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-bold text-slate-600">No beds configured yet</p>
+        <p className="text-xs text-slate-400 mt-0.5">Add rooms and beds to start tracking occupancy</p>
+      </div>
+      <button type="button" onClick={() => navigate('/rooms')}
+        className="shrink-0 flex items-center gap-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 active:scale-95 transition-all px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
+        Add Beds
+      </button>
     </div>
   )
 
   return (
     <div className="space-y-2">
-      {/* Over-capacity alert */}
+
+      {/* 1. Invalid state — critical */}
+      {bedStatus === 'invalid_state' && (
+        <div className="flex items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
+          <AlertTriangle size={16} className="text-red-500 shrink-0" />
+          <p className="text-sm font-bold text-red-700">
+            Data inconsistency: tenants are assigned without any beds configured
+          </p>
+        </div>
+      )}
+
+      {/* 2. Over capacity — operational */}
       {bedStatus === 'over_capacity' && (
         <div className="flex items-center gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3.5">
           <AlertTriangle size={16} className="text-orange-500 shrink-0" />
@@ -115,51 +177,102 @@ const AlertsSection = ({ financials, beds, navigate }) => {
               {extraOccupants} extra occupant{extraOccupants !== 1 ? 's' : ''} beyond capacity
             </p>
             <p className="text-xs text-orange-500 mt-0.5">
-              Total beds: {totalBeds} · Occupied: {occupiedBeds}
+              {totalBeds} {totalBeds === 1 ? 'bed' : 'beds'} · {occupiedBeds} {occupiedBeds === 1 ? 'tenant' : 'tenants'}
             </p>
           </div>
           <button type="button" onClick={() => navigate('/rooms')}
             className="shrink-0 flex items-center gap-1 rounded-lg border border-orange-300 bg-white hover:bg-orange-50 active:scale-95 transition-all px-2.5 py-1.5 text-[11px] font-semibold text-orange-700">
-            View Rooms <ChevronRight size={10} />
+            View Rooms
           </button>
         </div>
       )}
 
-      {/* Invalid state — data inconsistency */}
-      {bedStatus === 'invalid_state' && (
-        <div className="flex items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
-          <AlertTriangle size={16} className="text-red-500 shrink-0" />
-          <p className="text-sm font-bold text-red-700">
-            Data inconsistency: tenants assigned without beds
-          </p>
-        </div>
-      )}
-
-      {/* Dues alert */}
-      {totalDueCount > 0 && (
+      {/* 3. Overdue rent — high priority financial */}
+      {overdueCount > 0 && (
         <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3.5">
           <div className="h-8 w-8 rounded-lg bg-red-100 border border-red-200 flex items-center justify-center shrink-0">
             <IndianRupee size={14} className="text-red-600" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-red-700">
-              {totalDueCount} tenant{totalDueCount !== 1 ? 's' : ''} have pending dues
+              {overdueCount} tenant{overdueCount !== 1 ? 's' : ''} have overdue rent
             </p>
-            <p className="text-xs text-red-500 mt-0.5">{fmt(totalDueAmount)} outstanding this month</p>
+            <p className="text-xs text-red-500 mt-0.5">{fmt(overdueAmt)} overdue</p>
           </div>
           <button type="button" onClick={() => navigate('/rent')}
             className="shrink-0 flex items-center gap-1 rounded-lg bg-red-600 hover:bg-red-700 active:scale-95 transition-all px-3 py-1.5 text-[11px] font-bold text-white">
-            View Dues <ChevronRight size={11} />
+            Collect Rent
           </button>
         </div>
       )}
+
+      {/* 4. Pending rent — hidden only when overdueMode */}
+      {!overdueMode && pendingCount > 0 && (
+        <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3.5">
+          <div className="h-8 w-8 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center shrink-0">
+            <IndianRupee size={14} className="text-amber-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-amber-700">
+              {pendingCount} tenant{pendingCount !== 1 ? 's' : ''} have upcoming dues
+            </p>
+            <p className="text-xs text-amber-500 mt-0.5">{fmt(pendingAmt)} due this month</p>
+          </div>
+          <button type="button" onClick={() => navigate('/rent')}
+            className="shrink-0 flex items-center gap-1 rounded-lg border border-amber-300 bg-white hover:bg-amber-50 active:scale-95 transition-all px-2.5 py-1.5 text-[11px] font-semibold text-amber-700">
+            View Details
+          </button>
+        </div>
+      )}
+
+      {/* 5. Rent not generated — explicit backend flag, not inferred */}
+      {noRentGenerated && (
+        <div className="flex items-center gap-3 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3.5">
+          <AlertTriangle size={15} className="text-amber-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-amber-700">Rent not generated yet</p>
+            <p className="text-xs text-amber-500 mt-0.5">Rent will be generated automatically when you open Rent section</p>
+          </div>
+          <button type="button" onClick={() => navigate('/rent')}
+            className="shrink-0 flex items-center gap-1 rounded-lg border border-amber-300 bg-white hover:bg-amber-50 active:scale-95 transition-all px-2.5 py-1.5 text-[11px] font-semibold text-amber-700">
+            Go to Rent
+          </button>
+        </div>
+      )}
+
+      {/* 6. Single insight slot — exactly one shown, priority: zero occ > low occ > vacant */}
+      {totalBeds > 0 && bedStatus !== 'invalid_state' && (
+        occupiedBeds === 0 ? (
+          <div className="flex items-center gap-2.5 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3">
+            <BedDouble size={13} className="text-slate-400 shrink-0" />
+            <p className="text-[12px] font-medium text-slate-500">
+              No tenants currently — {totalBeds} bed{totalBeds !== 1 ? 's' : ''} available
+            </p>
+          </div>
+        ) : lowOccupancy ? (
+          <div className="flex items-center gap-2.5 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3">
+            <BedDouble size={13} className="text-slate-400 shrink-0" />
+            <p className="text-[12px] font-medium text-slate-500">
+              Low occupancy — {vacantBeds} {vacantBeds === 1 ? 'bed' : 'beds'} still vacant
+            </p>
+          </div>
+        ) : vacantBeds > 0 ? (
+          <div className="flex items-center gap-2.5 rounded-xl bg-blue-50 border border-blue-100 px-4 py-3">
+            <BedDouble size={13} className="text-blue-400 shrink-0" />
+            <p className="text-[12px] font-medium text-blue-600">
+              {vacantBeds} bed{vacantBeds !== 1 ? 's' : ''} available
+            </p>
+          </div>
+        ) : null
+      )}
+
     </div>
   )
 }
 
 // ── Financial Summary ─────────────────────────────────────────────────────────
 const FinancialSummaryCard = ({ financials, period, navigate }) => {
-  const { expectedRent, collectedRent, pendingRent, collectionRate, netIncome, totalExpenses } = financials
+  const { expectedRent, collectedRent, pendingDues, collectionRate, netIncome, totalExpenses } = financials
   const rateColor  = collectionRate >= 80 ? 'text-emerald-600' : collectionRate >= 50 ? 'text-amber-500' : 'text-red-500'
   const barColor   = collectionRate >= 80 ? 'bg-emerald-500'   : collectionRate >= 50 ? 'bg-amber-400'   : 'bg-red-500'
   const isPositive = (netIncome ?? 0) >= 0
@@ -170,8 +283,8 @@ const FinancialSummaryCard = ({ financials, period, navigate }) => {
     insight = { text: 'All payments collected for this month', positive: true }
   } else if (collectedRent === 0 && expectedRent > 0) {
     insight = { text: 'No payments collected yet — start collecting rent', positive: false }
-  } else if (pendingRent > 0) {
-    insight = { text: `${fmt(pendingRent)} pending — collect payment or use deposit`, positive: false }
+  } else if (pendingDues > 0) {
+    insight = { text: `${fmt(pendingDues)} total outstanding — collect payment or use deposit`, positive: false }
   }
 
   return (
@@ -197,8 +310,8 @@ const FinancialSummaryCard = ({ financials, period, navigate }) => {
           <p className="text-sm font-bold text-emerald-700 tabular-nums">{fmt(collectedRent)}</p>
         </div>
         <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-center">
-          <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wide mb-1">Remaining</p>
-          <p className="text-sm font-bold text-amber-700 tabular-nums">{fmt(pendingRent)}</p>
+          <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wide mb-1">Total Due</p>
+          <p className="text-sm font-bold text-amber-700 tabular-nums">{fmt(pendingDues)}</p>
         </div>
       </div>
 
@@ -457,39 +570,44 @@ const NoPropertyState = () => {
   ]
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-2xl">
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center h-20 w-20 rounded-3xl mb-5 mx-auto"
+    <div className="px-4 py-8 pb-24 md:pb-8">
+      <div className="w-full max-w-lg mx-auto">
+
+        {/* Hero */}
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl mb-4 mx-auto"
             style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
-            <Building2 size={36} style={{ color: '#60C3AD' }} />
+            <Building2 size={28} style={{ color: '#60C3AD' }} />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Welcome to TenantInnFlow</h1>
-          <p className="text-slate-400 mt-2 text-sm leading-relaxed max-w-sm mx-auto">
-            Add your first property to start managing rooms, tenants, and rent — all in one place.
+          <h1 className="text-xl font-bold text-slate-800 tracking-tight">Welcome to DormAxis</h1>
+          <p className="text-slate-400 mt-2 text-sm leading-relaxed max-w-xs mx-auto">
+            Add your first property to start managing rooms, tenants, and rent.
           </p>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-6">
-          <div className="px-6 py-5 flex items-center justify-between gap-4">
+        {/* CTA card */}
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-4">
+          <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-800">Create your first property</p>
               <p className="text-xs text-slate-400 mt-0.5">Takes less than a minute to set up</p>
             </div>
             <button onClick={() => navigate('/properties')}
-              className="shrink-0 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+              className="w-full sm:w-auto shrink-0 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}>
               <Plus size={15} /> Add Property
             </button>
           </div>
           <div className="h-px bg-slate-100" />
-          <div className="px-6 py-4 bg-slate-50/60">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-3">
-              Or select an existing property from the sidebar
+          <div className="px-5 py-3 bg-slate-50/60">
+            <p className="text-xs text-slate-400">
+              <span className="md:hidden">Already have a property? Switch from the <span className="font-semibold text-slate-500">More</span> tab below.</span>
+              <span className="hidden md:inline">Already have a property? Select it from the sidebar on the left.</span>
             </p>
           </div>
         </div>
 
+        {/* Feature grid */}
         <div className="grid grid-cols-2 gap-3">
           {features.map(({ icon: Icon, label, desc }) => (
             <div key={label} className="rounded-xl border border-slate-100 bg-white px-4 py-3.5 flex items-start gap-3">
@@ -514,6 +632,8 @@ const Dashboard = () => {
   const { selectedProperty } = useProperty()
   const propertyId = selectedProperty?._id ?? ''
   const navigate   = useNavigate()
+  const { user }   = useAuth()
+  const { greeting, time, date } = useGreeting()
 
   const { data, loading, error, refetch } = useApi(
     () => propertyId ? getPropertyDashboard(propertyId) : Promise.resolve({ data: null }),
@@ -556,6 +676,12 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-5 max-w-6xl">
+
+      {/* Greeting */}
+      <div>
+        <p className="text-xl font-bold text-slate-800">{greeting}, {user?.name?.split(' ')[0]} 👋</p>
+        <p className="text-xs text-slate-400 mt-0.5">{date} · {time}</p>
+      </div>
 
       {/* Header */}
       <div className="flex items-center justify-between">

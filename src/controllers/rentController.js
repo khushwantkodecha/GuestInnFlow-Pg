@@ -191,6 +191,15 @@ const recordPayment = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'amount must be a positive number' });
   }
 
+  // Block payments for tenants without a bed — no bed = not active = no billing
+  const payingTenant = await Tenant.findOne({ _id: tenantId, property: req.params.propertyId }).lean();
+  if (!payingTenant) {
+    return res.status(404).json({ success: false, message: 'Tenant not found' });
+  }
+  if (payingTenant.status === 'incomplete') {
+    return res.status(400).json({ success: false, message: 'Cannot record payment: tenant has no bed assigned. Assign a bed first.' });
+  }
+
   const result = await rentService.allocatePayment(
     req.params.propertyId,
     tenantId,
@@ -289,6 +298,15 @@ const addManualCharge = asyncHandler(async (req, res) => {
 
   if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
     return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+  }
+
+  // Block charges for tenants without a bed
+  const chargeTenant = await Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId }).lean();
+  if (!chargeTenant) {
+    return res.status(404).json({ success: false, message: 'Tenant not found' });
+  }
+  if (chargeTenant.status === 'incomplete') {
+    return res.status(400).json({ success: false, message: 'Cannot add charge: tenant has no bed assigned. Assign a bed first.' });
   }
 
   const result = await rentService.addManualCharge(

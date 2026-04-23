@@ -147,7 +147,7 @@ const BottomNav = () => {
                   <Building2 size={13} style={{ color: '#60C3AD' }} />
                 </div>
                 <div>
-                  <p className="text-[13px] font-bold text-slate-800 leading-none">TenantInnFlow</p>
+                  <p className="text-[13px] font-bold text-slate-800 leading-none">DormAxis</p>
                   <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">PG / Hostel</p>
                 </div>
               </div>

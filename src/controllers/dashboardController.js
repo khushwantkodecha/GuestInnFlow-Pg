@@ -67,9 +67,10 @@ const computeStats = async (propertyIds) => {
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]),
 
-    // 4. New check-ins in current calendar month
+    // 4. New check-ins in current calendar month (exclude incomplete — no bed yet)
     Tenant.countDocuments({
-      property: { $in: propertyIds },
+      property:    { $in: propertyIds },
+      status:      { $in: ['active', 'notice'] },
       checkInDate: { $gte: startOfMonth, $lte: now },
     }),
 
@@ -81,7 +82,8 @@ const computeStats = async (propertyIds) => {
           _id: '$status',
           totalAmount: { $sum: '$amount' },
           totalPaid:   { $sum: '$paidAmount' },
-          count: { $sum: 1 },
+          count:       { $sum: 1 },
+          dueCount:    { $sum: { $cond: [{ $gt: ['$balance', 0] }, 1, 0] } },
         },
       },
     ]),
@@ -98,9 +100,9 @@ const computeStats = async (propertyIds) => {
       { $group: { _id: '$type', total: { $sum: '$amount' } } },
     ]),
 
-    // 8. Deposit stats — total expected vs collected
+    // 8. Deposit stats — total expected vs collected (exclude incomplete — no bed yet)
     Tenant.aggregate([
-      { $match: { property: { $in: propertyIds } } },
+      { $match: { property: { $in: propertyIds }, status: { $ne: 'incomplete' } } },
       {
         $group: {
           _id: null,
@@ -161,11 +163,11 @@ const computeStats = async (propertyIds) => {
   for (const t of tenantStats) tenantMap[t._id] = t.count;
 
   const rentMap = {
-    paid:    { totalAmount: 0, totalPaid: 0, count: 0 },
-    pending: { totalAmount: 0, totalPaid: 0, count: 0 },
-    overdue: { totalAmount: 0, totalPaid: 0, count: 0 },
+    paid:    { totalAmount: 0, totalPaid: 0, count: 0, dueCount: 0 },
+    pending: { totalAmount: 0, totalPaid: 0, count: 0, dueCount: 0 },
+    overdue: { totalAmount: 0, totalPaid: 0, count: 0, dueCount: 0 },
   };
-  for (const r of rentStats) rentMap[r._id] = { totalAmount: r.totalAmount, totalPaid: r.totalPaid, count: r.count };
+  for (const r of rentStats) rentMap[r._id] = { totalAmount: r.totalAmount, totalPaid: r.totalPaid, count: r.count, dueCount: r.dueCount ?? 0 };
 
   const expectedRent  = expectedRentResult[0]?.total ?? 0;
   // actual money received this month from Payment records (excludes deposits and reversals)
@@ -182,6 +184,7 @@ const computeStats = async (propertyIds) => {
   const totalExpenses = Object.values(expenseBreakdown).reduce((sum, v) => sum + v, 0);
 
   const pendingDues = pendingDuesResult[0]?.total ?? 0;
+  const hasRentRecords = (rentMap.paid.count + rentMap.pending.count + rentMap.overdue.count) > 0;
 
   return {
     properties: {
@@ -216,10 +219,11 @@ const computeStats = async (propertyIds) => {
       netIncome: collectedRent - totalExpenses,
       collectionRate: expectedRent > 0 ? Math.round((collectedRent / expectedRent) * 100) : 0,
       pendingDues,    // sum of balance across non-paid RentPayment records
+      hasRentRecords, // true if any RentPayment records exist for this property this month
       breakdown: {
         paid:    { amount: rentMap.paid.totalAmount,                                                    count: rentMap.paid.count },
-        pending: { amount: rentMap.pending.totalAmount - (rentMap.pending.totalPaid ?? 0),              count: rentMap.pending.count },
-        overdue: { amount: rentMap.overdue.totalAmount - (rentMap.overdue.totalPaid ?? 0),              count: rentMap.overdue.count },
+        pending: { amount: rentMap.pending.totalAmount - (rentMap.pending.totalPaid ?? 0),              count: rentMap.pending.dueCount },
+        overdue: { amount: rentMap.overdue.totalAmount - (rentMap.overdue.totalPaid ?? 0),              count: rentMap.overdue.dueCount },
       },
     },
     expenses: {
@@ -271,6 +275,7 @@ const emptyStats = (totalProperties = 0) => ({
     expectedRent: 0, collectedRent: 0,
     pendingRent: 0, overdueRent: 0, totalExpenses: 0, netIncome: 0, collectionRate: 0,
     pendingDues: 0,
+    hasRentRecords: false,
     breakdown: {
       paid:    { amount: 0, count: 0 },
       pending: { amount: 0, count: 0 },

@@ -2,14 +2,16 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   User, Lock, Shield, Info, LogOut, ChevronRight,
-  Save, RefreshCw, Check, CheckCircle2,
+  Save, RefreshCw, Check, CheckCircle2, Eye, EyeOff, KeyRound,
   IndianRupee, Banknote, Landmark, CreditCard,
   ArrowDownUp, Layers, Wallet, Building2,
 } from 'lucide-react'
-import { useAuth }     from '../context/AuthContext'
-import { useProperty } from '../context/PropertyContext'
-import { useToast }    from '../context/ToastContext'
-import { useNavigate } from 'react-router-dom'
+import { useAuth }         from '../context/AuthContext'
+import { useProperty }     from '../context/PropertyContext'
+import { useToast }        from '../context/ToastContext'
+import { useNavigate }     from 'react-router-dom'
+import { changePassword }  from '../api/auth'
+import PhoneInput          from '../components/ui/PhoneInput'
 
 // ── Payment method definitions ─────────────────────────────────────────────────
 const PAYMENT_METHODS = [
@@ -32,39 +34,38 @@ const SectionHead = ({ title, desc }) => (
 )
 
 // ── Profile panel ──────────────────────────────────────────────────────────────
-const sanitizePhone = (val) => (val ?? '').replace(/\D/g, '').slice(0, 10)
+const normalizePhone = (val) => val ?? ''
 
 const ProfilePanel = ({ user, onUpdate }) => {
   const toast      = useToast()
   const hasSynced  = useRef(false)
   const [name,      setName]      = useState(user?.name  ?? '')
-  const [phone,     setPhone]     = useState(sanitizePhone(user?.phone))
+  const [phone,     setPhone]     = useState(normalizePhone(user?.phone))
   const [saving,    setSaving]    = useState(false)
   const [error,     setError]     = useState('')
   const [phoneErr,  setPhoneErr]  = useState('')
   const [lastSaved, setLastSaved] = useState(null)
 
-  // Sync form when user loads after mount (e.g. page refresh while on settings)
+  // Sync form when user loads after mount
   useEffect(() => {
     if (user && !hasSynced.current) {
       hasSynced.current = true
       setName(user.name ?? '')
-      setPhone(sanitizePhone(user.phone))
+      setPhone(normalizePhone(user.phone))
     }
   }, [user])
 
   const initials   = (user?.name ?? '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
-  const savedPhone = sanitizePhone(user?.phone)
+  const savedPhone = normalizePhone(user?.phone)
   const dirty      = name.trim() !== (user?.name ?? '') || phone !== savedPhone
 
   const validatePhone = (val) => {
-    if (!val.trim()) return ''
-    if (!/^\d{10}$/.test(val.trim())) return 'Phone must be exactly 10 digits'
+    if (!val || !val.trim()) return 'Mobile number is required'
+    if (!/^\+\d{7,15}$/.test(val.trim())) return 'Enter a valid mobile number'
     return ''
   }
 
-  const handlePhoneChange = (e) => {
-    const val = e.target.value.replace(/\D/g, '').slice(0, 10)
+  const handlePhoneChange = (val) => {
     setPhone(val)
     setPhoneErr(val ? validatePhone(val) : '')
     setError('')
@@ -76,7 +77,7 @@ const ProfilePanel = ({ user, onUpdate }) => {
     if (pErr) { setPhoneErr(pErr); return }
     setSaving(true); setError('')
     try {
-      await onUpdate({ name: name.trim(), phone: phone.trim() || undefined })
+      await onUpdate({ name: name.trim(), phone: phone.trim() })
       setLastSaved(new Date())
       toast('Profile updated successfully', 'success')
     } catch (err) {
@@ -119,19 +120,16 @@ const ProfilePanel = ({ user, onUpdate }) => {
           />
         </div>
         <div>
-          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Phone</label>
-          <input
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Mobile Number</label>
+          <PhoneInput
             value={phone}
             onChange={handlePhoneChange}
-            placeholder="10-digit mobile number"
-            inputMode="numeric"
-            className={`w-full rounded-xl border bg-white px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 transition-colors ${
-              phoneErr ? 'border-red-300 focus:ring-red-200 focus:border-red-400' : 'border-slate-200 focus:ring-[#60C3AD]/30 focus:border-[#60C3AD]'
-            }`}
+            placeholder="Mobile number"
+            error={!!phoneErr}
           />
           {phoneErr
             ? <p className="text-[11px] text-red-500 mt-1">{phoneErr}</p>
-            : <p className="text-[11px] text-slate-400 mt-1">Numbers only, exactly 10 digits</p>
+            : <p className="text-[11px] text-slate-400 mt-1">Select country code and enter your number</p>
           }
         </div>
         <div>
@@ -302,82 +300,259 @@ const HowBillingWorksPanel = () => (
 )
 
 // ── Security panel ─────────────────────────────────────────────────────────────
-const SECURITY_ITEMS = [
-  { icon: Lock,   label: 'Change Password',           desc: 'Update your login password',          soon: 'Available soon — contact support to change password now' },
-  { icon: Shield, label: 'Two-Factor Authentication', desc: 'Add an extra layer of security',       soon: 'Available soon'                                          },
-]
+const PwdInput = ({ id, label, value, onChange, show, onToggle, placeholder, hasError }) => (
+  <div>
+    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+      {label}
+    </label>
+    <div className="relative">
+      <input
+        id={id}
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        autoComplete="off"
+        className={`w-full rounded-xl border pr-10 px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 transition-colors ${
+          hasError
+            ? 'border-red-300 focus:ring-red-200 focus:border-red-400'
+            : 'border-slate-200 focus:ring-[#60C3AD]/30 focus:border-[#60C3AD]'
+        }`}
+      />
+      <button
+        type="button"
+        onClick={onToggle}
+        tabIndex={-1}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+      >
+        {show ? <EyeOff size={15} /> : <Eye size={15} />}
+      </button>
+    </div>
+  </div>
+)
 
 const SecurityPanel = () => {
+  const toast        = useToast()
   const lastLoginRaw = localStorage.getItem('gif_login_ts')
   const lastLogin    = lastLoginRaw
     ? new Date(lastLoginRaw).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     : null
 
-  const handleContact = () => {
-    window.open('mailto:support@tenantinnflow.com?subject=Password Change Request&body=Please help me change my account password.', '_blank')
+  const [form,    setForm]    = useState({ current: '', newPwd: '', confirm: '' })
+  const [show,    setShow]    = useState({ current: false, newPwd: false, confirm: false })
+  const [saving,  setSaving]  = useState(false)
+  const [error,   setError]   = useState('')
+  const [success, setSuccess] = useState(false)
+
+  const set    = (k, v) => { setForm(f => ({ ...f, [k]: v })); setError(''); setSuccess(false) }
+  const toggle = (k)    => setShow(s => ({ ...s, [k]: !s[k] }))
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!form.current)             { setError('Enter your current password'); return }
+    if (form.newPwd.length < 6)    { setError('New password must be at least 6 characters'); return }
+    if (form.newPwd !== form.confirm) { setError('New passwords do not match'); return }
+    setSaving(true); setError('')
+    try {
+      await changePassword({ currentPassword: form.current, newPassword: form.newPwd })
+      setSuccess(true)
+      setForm({ current: '', newPwd: '', confirm: '' })
+      toast('Password changed successfully', 'success')
+    } catch (err) {
+      const code = err.response?.data?.code
+      setError(
+        code === 'WRONG_CURRENT_PASSWORD'
+          ? 'Current password is incorrect.'
+          : (err.response?.data?.message ?? 'Failed to change password. Try again.')
+      )
+    } finally {
+      setSaving(false)
+    }
   }
+
+  const isCurrentError = error === 'Current password is incorrect.'
 
   return (
     <>
-      <SectionHead title="Security" desc="Password and account protection" />
+      <SectionHead title="Security" desc="Change your login password" />
 
-      {/* Info banner */}
-      <div className="rounded-xl bg-blue-50 border border-blue-100 px-4 py-3.5 mb-4">
-        <p className="text-[12px] font-semibold text-blue-700">Security features are being prepared.</p>
-        <p className="text-[11px] text-blue-600/80 mt-1 leading-relaxed">
-          Contact support for urgent access issues.
-        </p>
-      </div>
+      <form onSubmit={handleSubmit} className="space-y-4">
 
-      {/* Contact support action */}
-      <button
-        onClick={handleContact}
-        className="w-full flex items-center gap-3 p-4 rounded-xl border border-[#60C3AD]/30 bg-white hover:bg-[#60C3AD]/5 transition-colors mb-4 text-left"
-      >
-        <span className="shrink-0 flex h-8 w-8 items-center justify-center rounded-lg"
-          style={{ background: 'rgba(96,195,173,0.10)', color: '#60C3AD' }}>
-          <Lock size={14} />
-        </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-slate-700">Need to change password?</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">Contact support — we'll help immediately</p>
-        </div>
-        <ChevronRight size={14} className="text-slate-300 shrink-0" />
-      </button>
-
-      {/* Disabled items */}
-      <div className="space-y-2 mb-5">
-        {SECURITY_ITEMS.map(({ icon: Icon, label, desc, soon }) => (
-          <div key={label} className="flex items-start gap-3 p-4 rounded-xl border border-slate-100 bg-slate-50 cursor-not-allowed select-none">
-            <span className="shrink-0 flex h-8 w-8 items-center justify-center rounded-lg bg-slate-200 text-slate-400 mt-0.5">
-              <Icon size={14} />
-            </span>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-slate-500">{label}</p>
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-600 border border-amber-100">
-                  Soon
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-0.5">{desc}</p>
-              <p className="text-[11px] text-slate-400/70 mt-1 italic">{soon}</p>
-            </div>
+        {/* Error */}
+        {error && (
+          <div className="flex items-center gap-2 rounded-xl bg-red-50 border border-red-100 px-3.5 py-3 text-sm text-red-600">
+            <Lock size={13} className="shrink-0" />{error}
           </div>
-        ))}
+        )}
+
+        {/* Success */}
+        {success && (
+          <div className="flex items-center gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-3.5 py-3 text-sm text-emerald-700">
+            <CheckCircle2 size={13} className="shrink-0" />Password updated successfully!
+          </div>
+        )}
+
+        <PwdInput
+          id="current-pwd"
+          label="Current Password"
+          value={form.current}
+          onChange={e => set('current', e.target.value)}
+          show={show.current}
+          onToggle={() => toggle('current')}
+          placeholder="Your current password"
+          hasError={isCurrentError}
+        />
+
+        <div className="h-px bg-slate-100" />
+
+        <PwdInput
+          id="new-pwd"
+          label="New Password"
+          value={form.newPwd}
+          onChange={e => set('newPwd', e.target.value)}
+          show={show.newPwd}
+          onToggle={() => toggle('newPwd')}
+          placeholder="Min. 6 characters"
+          hasError={false}
+        />
+
+        <PwdInput
+          id="confirm-pwd"
+          label="Confirm New Password"
+          value={form.confirm}
+          onChange={e => set('confirm', e.target.value)}
+          show={show.confirm}
+          onToggle={() => toggle('confirm')}
+          placeholder="Repeat new password"
+          hasError={!!error && form.confirm && form.newPwd !== form.confirm}
+        />
+
+        <button
+          type="submit"
+          disabled={saving || !form.current || !form.newPwd || !form.confirm}
+          className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[.98] disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ background: 'linear-gradient(135deg, #45a793, #60c3ad)' }}
+        >
+          {saving
+            ? <><RefreshCw size={14} className="animate-spin" />Updating…</>
+            : <><KeyRound size={14} />Update Password</>}
+        </button>
+      </form>
+
+      {/* Footer info */}
+      <div className="mt-6 space-y-2">
+        {lastLogin && (
+          <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5">
+            <Shield size={12} className="text-slate-400 shrink-0" />
+            <p className="text-[11px] text-slate-500">Last login: <span className="font-medium">{lastLogin}</span></p>
+          </div>
+        )}
+        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-3.5 py-2.5">
+          <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
+          <p className="text-[11px] text-emerald-700 font-medium">Your data is securely stored and encrypted.</p>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ── Subscription panel ─────────────────────────────────────────────────────────
+const PLAN_CONFIG = {
+  standard:   { name: 'Standard',   maxProperties: 1,        price: 1999,  color: '#64748b', bg: '#f8fafc', border: '#e2e8f0' },
+  pro:        { name: 'Pro',        maxProperties: 2,        price: 2999,  color: '#3b82f6', bg: '#eff6ff', border: '#bfdbfe' },
+  elite:      { name: 'Elite',      maxProperties: 3,        price: 3999,  color: '#8b5cf6', bg: '#f5f3ff', border: '#ddd6fe' },
+  enterprise: { name: 'Enterprise', maxProperties: Infinity, price: 5999,  color: '#10b981', bg: '#ecfdf5', border: '#a7f3d0' },
+}
+
+const SubscriptionPanel = ({ user, propertyCount }) => {
+  const plan   = user?.plan ?? 'standard'
+  const config = PLAN_CONFIG[plan]
+  const used   = propertyCount ?? 0
+  const max    = config.maxProperties
+  const pct    = max === Infinity ? 100 : Math.min(100, Math.round((used / max) * 100))
+
+  return (
+    <>
+      <SectionHead title="Subscription" desc="Your current plan and available options" />
+
+      {/* Current plan card */}
+      <div className="rounded-2xl border p-5 mb-5" style={{ background: config.bg, borderColor: config.border }}>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: config.color }}>Current Plan</p>
+            <p className="text-xl font-black text-slate-800">{config.name}</p>
+            <p className="text-sm text-slate-500 mt-0.5">
+              ₹{config.price.toLocaleString('en-IN')}<span className="text-xs text-slate-400">/year</span>
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="text-3xl font-black leading-none" style={{ color: config.color }}>
+              {used}{max !== Infinity && `/${max}`}
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1">
+              {max === Infinity ? 'Unlimited properties' : `Propert${used !== 1 ? 'ies' : 'y'} used`}
+            </p>
+          </div>
+        </div>
+        {max !== Infinity && (
+          <div className="mt-4">
+            <div className="flex justify-between text-[11px] text-slate-400 mb-1.5">
+              <span>Property usage</span>
+              <span style={{ color: pct >= 100 ? '#ef4444' : config.color }}>{pct}%</span>
+            </div>
+            <div className="h-2 bg-white/70 rounded-full overflow-hidden border" style={{ borderColor: config.border }}>
+              <div className="h-full rounded-full transition-all"
+                style={{ width: `${pct}%`, background: pct >= 100 ? '#ef4444' : config.color }} />
+            </div>
+            {pct >= 100 && (
+              <p className="text-[11px] font-medium text-red-500 mt-1.5">Property limit reached — upgrade to add more.</p>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Last login */}
-      {lastLogin && (
-        <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 mb-3">
-          <Shield size={12} className="text-slate-400 shrink-0" />
-          <p className="text-[11px] text-slate-500">Last login: <span className="font-medium">{lastLogin}</span></p>
-        </div>
-      )}
+      {/* All plans comparison */}
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3">Available Plans</p>
+      <div className="space-y-2">
+        {Object.entries(PLAN_CONFIG).map(([key, cfg]) => {
+          const isCurrent = key === plan
+          return (
+            <div key={key}
+              className="flex items-center gap-4 rounded-xl border px-4 py-3.5 transition-all"
+              style={isCurrent
+                ? { background: cfg.bg, borderColor: cfg.border }
+                : { background: '#fff', borderColor: '#e2e8f0', opacity: 0.65 }
+              }>
+              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: cfg.color }} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-bold text-slate-700">{cfg.name}</p>
+                  {isCurrent && (
+                    <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-full text-white"
+                      style={{ background: cfg.color }}>Active</span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {cfg.maxProperties === Infinity ? 'Unlimited properties' : `Up to ${cfg.maxProperties} propert${cfg.maxProperties === 1 ? 'y' : 'ies'}`}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-sm font-black text-slate-700">₹{cfg.price.toLocaleString('en-IN')}</p>
+                <p className="text-[10px] text-slate-400">/year</p>
+              </div>
+            </div>
+          )
+        })}
+      </div>
 
-      {/* Trust message */}
-      <div className="flex items-center gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-3.5 py-2.5">
-        <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
-        <p className="text-[11px] text-emerald-700 font-medium">Your data is securely stored and encrypted.</p>
+      {/* Upgrade note */}
+      <div className="mt-5 rounded-xl bg-slate-50 border border-slate-200 px-4 py-4 text-center">
+        <p className="text-[12px] text-slate-500 mb-1">To upgrade your plan, reach out to us</p>
+        <a href="mailto:support@dormaxis.com"
+          className="text-[12px] font-semibold transition-colors"
+          style={{ color: '#60C3AD' }}>
+          support@dormaxis.com
+        </a>
       </div>
     </>
   )
@@ -385,9 +560,9 @@ const SecurityPanel = () => {
 
 // ── About panel ────────────────────────────────────────────────────────────────
 const ISSUE_CATEGORIES = [
-  { id: 'payment', label: 'Payment issue',  subject: 'Payment Issue - TenantInnFlow',  body: 'Describe the payment issue:' },
-  { id: 'tenant',  label: 'Tenant issue',   subject: 'Tenant Issue - TenantInnFlow',   body: 'Describe the tenant issue:'  },
-  { id: 'bug',     label: 'Bug / error',    subject: 'Bug Report - TenantInnFlow',     body: 'Describe the bug or error:'  },
+  { id: 'payment', label: 'Payment issue',  subject: 'Payment Issue - DormAxis',  body: 'Describe the payment issue:' },
+  { id: 'tenant',  label: 'Tenant issue',   subject: 'Tenant Issue - DormAxis',   body: 'Describe the tenant issue:'  },
+  { id: 'bug',     label: 'Bug / error',    subject: 'Bug Report - DormAxis',     body: 'Describe the bug or error:'  },
 ]
 
 const AboutPanel = () => {
@@ -400,7 +575,7 @@ const AboutPanel = () => {
 
   return (
     <>
-      <SectionHead title="About" desc="TenantInnFlow — PG & Hostel Management" />
+      <SectionHead title="About" desc="DormAxis — PG & Hostel Management" />
 
       {/* App identity */}
       <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 mb-5">
@@ -409,7 +584,7 @@ const AboutPanel = () => {
           <Building2 size={20} style={{ color: '#60C3AD' }} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-slate-800">TenantInnFlow</p>
+          <p className="text-sm font-bold text-slate-800">DormAxis</p>
           <p className="text-xs text-slate-400 mt-0.5">PG / Hostel Management Platform</p>
         </div>
         <div className="shrink-0 text-right">
@@ -496,17 +671,18 @@ const LogoutModal = ({ onCancel, onConfirm }) => createPortal(
 
 // ── Nav items ──────────────────────────────────────────────────────────────────
 const SECTIONS = [
-  { id: 'profile',      label: 'Profile',           icon: User        },
-  { id: 'payments',     label: 'Payments',           icon: IndianRupee },
-  { id: 'howitworks',   label: 'Billing Rules',       icon: Info        },
-  { id: 'security',     label: 'Security',           icon: Lock        },
-  { id: 'about',        label: 'About',              icon: Building2   },
+  { id: 'profile',      label: 'Profile',       icon: User        },
+  { id: 'subscription', label: 'Subscription',  icon: Layers      },
+  { id: 'payments',     label: 'Payments',      icon: IndianRupee },
+  { id: 'howitworks',   label: 'Billing Rules', icon: Info        },
+  { id: 'security',     label: 'Security',      icon: Lock        },
+  { id: 'about',        label: 'About',         icon: Building2   },
 ]
 
 // ── Main ───────────────────────────────────────────────────────────────────────
 const Settings = () => {
-  const { user, logout, updateUser }  = useAuth()
-  const { selectedProperty }          = useProperty()
+  const { user, logout, updateUser }           = useAuth()
+  const { selectedProperty, properties }       = useProperty()
   const navigate                      = useNavigate()
   const [active, setActive]           = useState('profile')
   const [confirmLogout, setConfirmLogout] = useState(false)
@@ -515,12 +691,13 @@ const Settings = () => {
 
   const renderPanel = () => {
     switch (active) {
-      case 'profile':    return <ProfilePanel user={user} onUpdate={updateUser} />
-      case 'payments':   return <PaymentsPanel selectedProperty={selectedProperty} />
-      case 'howitworks': return <HowBillingWorksPanel />
-      case 'security':   return <SecurityPanel />
-      case 'about':      return <AboutPanel />
-      default:           return null
+      case 'profile':      return <ProfilePanel user={user} onUpdate={updateUser} />
+      case 'subscription': return <SubscriptionPanel user={user} propertyCount={properties.length} />
+      case 'payments':     return <PaymentsPanel selectedProperty={selectedProperty} />
+      case 'howitworks':   return <HowBillingWorksPanel />
+      case 'security':     return <SecurityPanel />
+      case 'about':        return <AboutPanel />
+      default:             return null
     }
   }
 

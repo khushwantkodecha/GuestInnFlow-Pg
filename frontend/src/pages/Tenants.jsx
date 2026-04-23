@@ -551,6 +551,11 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
               )}
             </div>
           </div>
+          {!selectedRoomId && (
+            <p className="text-[11px] text-slate-400 font-medium">
+              No room selected — you can assign one later. Tenant will remain inactive until a bed is assigned.
+            </p>
+          )}
           <div>
             <label className="label text-[12px]">Move-in Date</label>
             <input type="date" className="input" value={form.checkInDate}
@@ -666,8 +671,7 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
                 <div className="grid grid-cols-2 gap-2">
                   <input className="input text-sm" placeholder="Contact name"
                     value={form.emergencyName} onChange={e => set('emergencyName', e.target.value)} />
-                  <input className="input text-sm" placeholder="Phone number"
-                    value={form.emergencyPhone} onChange={e => set('emergencyPhone', e.target.value)} />
+                  <PhoneInput value={form.emergencyPhone} onChange={v => set('emergencyPhone', v)} placeholder="Phone" />
                 </div>
               </div>
 
@@ -722,7 +726,7 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
 }
 
 // ── Tenant Row ────────────────────────────────────────────────────────────────
-const TenantRow = ({ tenant: t, onView, onQuickPay, onDepositCollect }) => {
+const TenantRow = ({ tenant: t, onView, onQuickPay }) => {
   const lb         = t.ledgerBalance ?? null
   const pending    = lb !== null && lb > 0 ? lb : 0
   const advance    = lb !== null && lb < 0 ? Math.abs(lb) : 0
@@ -741,10 +745,11 @@ const TenantRow = ({ tenant: t, onView, onQuickPay, onDepositCollect }) => {
   })()
 
   const statusDot = {
-    active:   'bg-emerald-400',
-    notice:   'bg-orange-400',
-    vacated:  'bg-slate-300',
-    reserved: 'bg-blue-400',
+    active:     'bg-emerald-400',
+    notice:     'bg-orange-400',
+    vacated:    'bg-slate-300',
+    reserved:   'bg-blue-400',
+    incomplete: 'bg-amber-400',
   }[t.status] ?? 'bg-slate-300'
 
   return (
@@ -786,18 +791,29 @@ const TenantRow = ({ tenant: t, onView, onQuickPay, onDepositCollect }) => {
               <span className="text-[9px] font-bold text-violet-600 bg-violet-100 rounded-full px-1.5 py-0.5">Extra</span>
             )}
           </div>
+        ) : t.status === 'incomplete' ? (
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded-full px-2 py-0.5">
+            No bed assigned
+          </span>
         ) : <span className="text-slate-300">—</span>}
       </td>
 
       {/* Rent */}
       <td className="px-4 py-4">
-        <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(t.rentAmount)}</p>
-        <p className="text-[10px] text-slate-400 mt-0.5">monthly</p>
+        {t.status === 'incomplete'
+          ? <span className="text-slate-300 text-xs">—</span>
+          : <>
+              <p className="text-sm font-bold text-slate-700 tabular-nums">{fmt(t.rentAmount)}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">monthly</p>
+            </>
+        }
       </td>
 
       {/* Outstanding */}
       <td className="px-4 py-4">
-        {hasPending ? (
+        {t.status === 'incomplete' ? (
+          <span className="text-slate-300 text-xs">—</span>
+        ) : hasPending ? (
           <>
             <p className="text-sm font-bold text-red-600 tabular-nums">{fmt(pending)}</p>
             <p className="text-[10px] text-red-400 mt-0.5">due</p>
@@ -872,20 +888,12 @@ const TenantRow = ({ tenant: t, onView, onQuickPay, onDepositCollect }) => {
             title="View profile">
             <Eye size={14} />
           </button>
-          {hasPending && (
+          {hasPending && t.status !== 'incomplete' && (
             <button
               onClick={() => onQuickPay(t)}
               className="flex items-center gap-1 rounded-xl bg-[#60C3AD] hover:bg-[#4fa898] px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors shadow-sm"
               title="Collect rent payment">
               <CreditCard size={11} /> Collect
-            </button>
-          )}
-          {depositDue && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onDepositCollect?.(t) }}
-              className="flex items-center gap-1 rounded-xl bg-amber-500 hover:bg-amber-600 px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors shadow-sm"
-              title="Mark deposit as collected">
-              Deposit
             </button>
           )}
         </div>
@@ -1679,7 +1687,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
   )
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex-1 min-h-0 overflow-y-auto scroll-smooth">
 
       {/* ── Hero Header ── */}
       <div className="px-5 py-3 bg-[#F8FAFC] border-b border-[#E2E8F0]">
@@ -1700,8 +1708,9 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                   ✦ Extra Bed
                 </span>
               )}
-              {/* Hero rent badge — derived from fresh rent API data, not stale t.ledgerBalance. */}
-              {!rentLoading && (() => {
+              {/* Hero rent badge — derived from fresh rent API data, not stale t.ledgerBalance.
+                  Skip for incomplete tenants: no rent generated, no badge should show. */}
+              {!rentLoading && t.status !== 'incomplete' && (() => {
                 const s = currentMonthRent?.status
                 const freshStatus =
                   s === 'paid'                             ? 'current'
@@ -1779,25 +1788,30 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
         <div className="mt-2 grid grid-cols-3 gap-2">
           <div className="rounded-xl bg-white border border-[#E2E8F0] px-3 py-2 text-center">
             <p className="text-[10px] text-slate-400 font-medium">Monthly Rent</p>
-            <p className="text-sm font-bold mt-0.5 tabular-nums text-[#334155]">{fmt(t.rentAmount)}</p>
+            {t.status === 'incomplete'
+              ? <p className="text-sm font-bold mt-0.5 tabular-nums text-slate-300">—</p>
+              : <p className="text-sm font-bold mt-0.5 tabular-nums text-[#334155]">{fmt(t.rentAmount)}</p>
+            }
           </div>
           <div className={`rounded-xl border px-3 py-2 text-center ${
-            profileLoading ? 'bg-white border-[#E2E8F0]'
+            t.status === 'incomplete' || profileLoading ? 'bg-white border-[#E2E8F0]'
             : balHasAdvance ? 'bg-emerald-50 border-emerald-200'
             : balHasDues    ? 'bg-amber-50 border-amber-200'
             :                 'bg-white border-[#E2E8F0]'
           }`}>
             <p className="text-[10px] font-medium text-slate-400">Balance</p>
-            {profileLoading
-              ? <div className="h-4 w-10 bg-slate-200 rounded animate-pulse mx-auto mt-1" />
-              : <p className={`text-sm font-bold mt-0.5 tabular-nums ${
-                  balHasAdvance ? 'text-emerald-700' : balHasDues ? 'text-amber-700' : 'text-slate-400'
-                }`}>
-                  {bal === null ? '—'
-                    : bal === 0 ? 'Settled'
-                    : balHasAdvance ? `Adv ₹${Math.abs(bal).toLocaleString('en-IN')}`
-                    : `Due ₹${bal.toLocaleString('en-IN')}`}
-                </p>
+            {t.status === 'incomplete'
+              ? <p className="text-sm font-bold mt-0.5 tabular-nums text-slate-300">—</p>
+              : profileLoading
+                ? <div className="h-4 w-10 bg-slate-200 rounded animate-pulse mx-auto mt-1" />
+                : <p className={`text-sm font-bold mt-0.5 tabular-nums ${
+                    balHasAdvance ? 'text-emerald-700' : balHasDues ? 'text-amber-700' : 'text-slate-400'
+                  }`}>
+                    {bal === null ? '—'
+                      : bal === 0 ? 'Settled'
+                      : balHasAdvance ? `Adv ₹${Math.abs(bal).toLocaleString('en-IN')}`
+                      : `Due ₹${bal.toLocaleString('en-IN')}`}
+                  </p>
             }
           </div>
           <div className="rounded-xl bg-white border border-[#E2E8F0] px-3 py-2 text-center">
@@ -1813,12 +1827,24 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
           </div>
         </div>
 
+        {/* ── Incomplete setup banner ── */}
+        {t.status === 'incomplete' && (
+          <div className="mt-2 flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
+            <AlertTriangle size={15} className="text-amber-500 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-amber-800">Incomplete setup — assign a bed to activate this tenant.</p>
+              <p className="text-xs text-amber-600 mt-0.5">Rent generation and payments are disabled until a bed is assigned via Rooms &amp; Beds.</p>
+            </div>
+          </div>
+        )}
+
         {/* ── Primary Actions ── */}
         <div className="mt-2 flex items-center gap-2">
           {(t.status !== 'vacated' || hasDues) && (
             <button type="button"
+              disabled={t.status === 'incomplete'}
               onClick={() => { setPayAmt(String(balHasDues && bal ? bal : t.rentAmount || '')); setPayNotes(t.status === 'vacated' ? 'Payment collected after vacating' : ''); setPayRef(''); setPayMethod(filteredPaymentMethods[0]?.[0] ?? 'cash'); setPayModal(true) }}
-              className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-[#60C3AD] hover:bg-[#4fa898] px-4 py-2.5 text-xs font-bold text-white transition-colors shadow-sm">
+              className={`flex-1 flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold text-white transition-colors shadow-sm ${t.status === 'incomplete' ? 'bg-slate-300 cursor-not-allowed' : 'bg-[#60C3AD] hover:bg-[#4fa898]'}`}>
               <CreditCard size={13} />
               {t.status === 'vacated' ? 'Collect Payment' : 'Record Payment'}
               {balHasDues && bal && (
@@ -1922,7 +1948,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
       </div>
 
       {/* ── Tab Bar ── */}
-      <div className="flex border-b border-[#E2E8F0] bg-white shrink-0">
+      <div className="sticky top-0 z-10 flex border-b border-[#E2E8F0] bg-white shadow-sm">
         {[['overview', 'Overview'], ['ledger', 'Ledger']].map(([tab, label]) => (
           <button key={tab} type="button" onClick={() => setActiveTab(tab)}
             className={`flex-1 py-2.5 text-xs font-semibold transition-colors border-b-2 ${
@@ -1935,8 +1961,8 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
         ))}
       </div>
 
-      {/* ── Scrollable Sections ── */}
-      <div className={`flex-1 overflow-y-auto ${activeTab === 'overview' ? 'px-5 py-4 space-y-3' : ''}`}>
+      {/* ── Sections ── */}
+      <div className={activeTab === 'overview' ? 'px-5 py-4 space-y-3' : ''}>
 
         {activeTab === 'overview' && <>
 
@@ -2072,8 +2098,21 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
           </div>
         )}
 
+        {/* ── Rent not started (incomplete tenants) ── */}
+        {t.status === 'incomplete' && (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100 shrink-0">
+              <BedDouble size={15} className="text-slate-400" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-600">Rent not started</p>
+              <p className="text-xs text-slate-400 mt-0.5">Assign a bed to begin billing</p>
+            </div>
+          </div>
+        )}
+
         {/* ── Rent Status Card ── */}
-        {!rentLoading && !profileLoading && t.status !== 'vacated' && (() => {
+        {!rentLoading && !profileLoading && t.status !== 'vacated' && t.status !== 'incomplete' && (() => {
           const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
           const paid    = currentMonthRent?.paidAmount ?? 0
           const total   = currentMonthRent?.amount ?? t.rentAmount ?? 0
@@ -2658,9 +2697,17 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
               const cashReceived = byCash + byUPI + byBank + byCheque   // actual cash — excludes deposit
               const totalCleared = cashReceived + byDeposit              // everything that cleared dues
 
-              const depositOriginal  = t.depositAmount  ?? 0
-              const depositRemaining = t.depositBalance ?? depositOriginal
-              const depositUsed      = byDeposit > 0 ? byDeposit : (depositOriginal - depositRemaining)
+              const depositOriginal  = t.depositAmount ?? 0
+              const depositCollected = t.depositPaid === true
+              // When not collected, nothing is held — remaining and used must both be 0.
+              // NOTE: depositBalance defaults to 0 in the schema (not null), so we cannot
+              // use `?? depositOriginal` here — that would only fire for null/undefined.
+              // Gate everything on depositCollected to avoid the impossible "Used ₹X but
+              // deposit was never collected" state.
+              const depositRemaining = depositCollected ? (t.depositBalance ?? depositOriginal) : 0
+              const depositUsed      = depositCollected
+                ? (byDeposit > 0 ? byDeposit : Math.max(0, depositOriginal - depositRemaining))
+                : 0
 
               const bal       = tabLedgerBalance ?? 0
               const isPending = bal > 0
@@ -2781,35 +2828,51 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                       </div>
                     </div>
 
-                    {/* 3 — Deposit Used */}
-                    <div className={`rounded-xl border px-3.5 py-3 ${
-                      depositUsed > 0 ? 'border-violet-200 bg-violet-50/40' : 'border-slate-200 bg-slate-50'
-                    }`}>
-                      <p className={`text-[9px] font-bold uppercase tracking-widest mb-1 ${depositUsed > 0 ? 'text-violet-500' : 'text-slate-400'}`}>
-                        Deposit Used
-                      </p>
-                      <p className={`text-base font-extrabold tabular-nums ${depositUsed > 0 ? 'text-violet-700' : 'text-slate-400'}`}>
-                        {depositUsed > 0 ? fmt(depositUsed) : '—'}
-                      </p>
-                      <div className="mt-2 pt-2 border-t border-violet-100/60 space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-[10px] text-slate-400">Original</span>
-                          <span className="text-[10px] font-semibold text-slate-600 tabular-nums">{depositOriginal > 0 ? fmt(depositOriginal) : '—'}</span>
-                        </div>
-                        {depositUsed > 0 && (
+                    {/* 3 — Deposit */}
+                    {depositCollected ? (
+                      /* Collected: show original / used / available breakdown */
+                      <div className={`rounded-xl border px-3.5 py-3 ${
+                        depositUsed > 0 ? 'border-violet-200 bg-violet-50/40' : 'border-slate-200 bg-slate-50'
+                      }`}>
+                        <p className={`text-[9px] font-bold uppercase tracking-widest mb-1 ${depositUsed > 0 ? 'text-violet-500' : 'text-slate-400'}`}>
+                          Deposit Used
+                        </p>
+                        <p className={`text-base font-extrabold tabular-nums ${depositUsed > 0 ? 'text-violet-700' : 'text-slate-400'}`}>
+                          {depositUsed > 0 ? fmt(depositUsed) : '—'}
+                        </p>
+                        <div className="mt-2 pt-2 border-t border-violet-100/60 space-y-1">
                           <div className="flex justify-between">
-                            <span className="text-[10px] text-violet-400">Used</span>
-                            <span className="text-[10px] font-semibold text-violet-600 tabular-nums">− {fmt(depositUsed)}</span>
+                            <span className="text-[10px] text-slate-400">Original</span>
+                            <span className="text-[10px] font-semibold text-slate-600 tabular-nums">{depositOriginal > 0 ? fmt(depositOriginal) : '—'}</span>
                           </div>
-                        )}
-                        <div className="flex justify-between pt-1 border-t border-violet-100/60 mt-1">
-                          <span className="text-[10px] font-bold text-slate-500">Available</span>
-                          <span className={`text-[10px] font-bold tabular-nums ${depositRemaining > 0 ? 'text-violet-700' : 'text-slate-400'}`}>
-                            {t.depositPaid ? fmt(depositRemaining) : 'Not collected'}
-                          </span>
+                          {depositUsed > 0 && (
+                            <div className="flex justify-between">
+                              <span className="text-[10px] text-violet-400">Used</span>
+                              <span className="text-[10px] font-semibold text-violet-600 tabular-nums">− {fmt(depositUsed)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between pt-1 border-t border-violet-100/60 mt-1">
+                            <span className="text-[10px] font-bold text-slate-500">Available</span>
+                            <span className={`text-[10px] font-bold tabular-nums ${depositRemaining > 0 ? 'text-violet-700' : 'text-slate-400'}`}>
+                              {fmt(depositRemaining)}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    ) : depositOriginal > 0 ? (
+                      /* Not collected: show flat "not collected" card — no used/available */
+                      <div className="rounded-xl border border-amber-200 bg-amber-50/40 px-3.5 py-3">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-amber-500 mb-1">Security Deposit</p>
+                        <p className="text-base font-extrabold tabular-nums text-amber-700">{fmt(depositOriginal)}</p>
+                        <p className="text-[10px] text-amber-600 font-medium mt-1.5">Not collected yet</p>
+                      </div>
+                    ) : (
+                      /* No deposit on file */
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-1">Security Deposit</p>
+                        <p className="text-base font-extrabold tabular-nums text-slate-400">—</p>
+                      </div>
+                    )}
 
                     {/* 4 — Final Balance */}
                     <div className={`rounded-xl border px-3.5 py-3 ${
@@ -2861,7 +2924,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
 
             {/* Quick Actions */}
             <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2 shrink-0 flex-wrap">
-              {t.status !== 'vacated' && (
+              {t.status !== 'vacated' && t.status !== 'incomplete' && (
                 <>
                   {/* Req #5: Primary — Collect Payment */}
                   <button type="button" onClick={() => { setPayAmt(''); setPayNotes(''); setPayRef(''); setPayMethod(filteredPaymentMethods[0]?.[0] ?? 'cash'); setPayModal(true) }}
@@ -3110,7 +3173,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                     <div className={`transition-opacity duration-200 ${sortFlash ? 'opacity-0' : 'opacity-100'}`}>
 
                       {/* ── Sticky summary bar ── */}
-                      <div className="sticky top-0 z-10 px-5 py-3 bg-slate-50/95 backdrop-blur-sm border-b border-slate-200">
+                      <div className="sticky top-9 z-10 px-5 py-3 bg-slate-50/95 backdrop-blur-sm border-b border-slate-200">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-[11px] font-semibold text-slate-500 tabular-nums">{fmt(totalBilled)} billed</span>
                           <span className="text-[10px] text-slate-300">•</span>
@@ -3153,7 +3216,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                                 return groups.map(({ date, items }) => (
                                   <div key={date}>
                                     {multi && (
-                                      <div className="px-5 py-1 bg-slate-100/60 border-b border-slate-100 sticky top-0">
+                                      <div className="px-5 py-1 bg-slate-100/60 border-b border-slate-100 sticky top-9">
                                         <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{date}</p>
                                       </div>
                                     )}
@@ -3189,7 +3252,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                                 return groups.map(({ date, items }) => (
                                   <div key={date}>
                                     {multi && (
-                                      <div className="px-5 py-1 bg-amber-50/60 border-b border-amber-100 sticky top-0">
+                                      <div className="px-5 py-1 bg-amber-50/60 border-b border-amber-100 sticky top-9">
                                         <p className="text-[9px] font-bold text-amber-400 uppercase tracking-widest">{date}</p>
                                       </div>
                                     )}
@@ -3283,7 +3346,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                                 return groups.map(({ date, items }) => (
                                   <div key={date}>
                                     {multi && (
-                                      <div className="px-5 py-1 bg-emerald-50/60 border-b border-emerald-100 sticky top-0">
+                                      <div className="px-5 py-1 bg-emerald-50/60 border-b border-emerald-100 sticky top-9">
                                         <p className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">{date}</p>
                                       </div>
                                     )}
@@ -3362,7 +3425,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                     )
                   })()}
                   {/* Header row */}
-                  <div className="sticky top-0 z-10 grid grid-cols-[1fr_68px_68px_60px] gap-0 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-4 py-2">
+                  <div className="sticky top-9 z-10 grid grid-cols-[1fr_68px_68px_60px] gap-0 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-4 py-2">
                     <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Transaction</p>
                     <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 text-right">Type</p>
                     <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 text-right">Amount</p>
@@ -3443,7 +3506,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                         lastDateKey = dateKey
                         const dateLabel = new Date(entry.createdAt).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' })
                         rows.push(
-                          <div key={`date-${dateKey}`} className="flex items-center gap-3 px-4 py-1.5 bg-slate-50/80 border-b border-slate-100 sticky top-[33px] z-[5]">
+                          <div key={`date-${dateKey}`} className="flex items-center gap-3 px-4 py-1.5 bg-slate-50/80 border-b border-slate-100 sticky top-[69px] z-[5]">
                             <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 whitespace-nowrap">{dateLabel}</span>
                             <div className="flex-1 h-px bg-slate-200" />
                           </div>
@@ -4223,6 +4286,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
               depositBalance: t.depositBalance ?? t.depositAmount ?? 0,
               depositPaid:    t.depositPaid ?? false,
               depositAmount:  t.depositAmount ?? 0,
+              ledgerBalance:  t.ledgerBalance ?? 0,
             },
           }}
           room={t.bed.room}
@@ -4528,14 +4592,14 @@ const NoPropertyState = () => {
   ]
 
   return (
-    <div className="flex items-center justify-center px-4 py-10 min-h-[60vh]">
-      <div className="w-full max-w-xl">
+    <div className="px-4 py-8 pb-24 md:pb-8">
+      <div className="w-full max-w-xl mx-auto">
 
         {/* Hero */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center h-20 w-20 rounded-3xl mb-5 mx-auto"
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-3xl mb-5 mx-auto"
             style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
-            <Users size={36} style={{ color: '#60C3AD' }} />
+            <Users size={32} style={{ color: '#60C3AD' }} />
           </div>
           <h2 className="text-xl font-bold text-slate-800">No property selected</h2>
           <p className="text-sm text-slate-400 mt-2 max-w-xs mx-auto leading-relaxed">
@@ -4545,14 +4609,14 @@ const NoPropertyState = () => {
 
         {/* CTA */}
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-5">
-          <div className="px-5 py-4 flex items-center justify-between gap-4">
+          <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-800">No properties yet?</p>
               <p className="text-xs text-slate-400 mt-0.5">Add a property first, then assign tenants to beds</p>
             </div>
             <button
               onClick={() => navigate('/properties')}
-              className="shrink-0 inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+              className="w-full sm:w-auto shrink-0 inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}
             >
               <Building2 size={14} /> Add Property
@@ -4565,7 +4629,8 @@ const NoPropertyState = () => {
               Your property
               <ChevronRight size={10} className="text-slate-300" />
             </div>
-            <span>shows in the sidebar panel on the left</span>
+            <span className="md:hidden">Already have a property? Switch from the <span className="font-semibold text-slate-500">More</span> tab below.</span>
+            <span className="hidden md:inline">shows in the sidebar panel on the left</span>
           </div>
         </div>
 
@@ -4857,15 +4922,6 @@ const Tenants = () => {
     } catch (err) { toast(err.response?.data?.message || 'Error updating deposit status', 'error') }
   }
 
-  // Quick-collect deposit from tenant list (no modal — fires immediately)
-  const handleQuickDepositCollect = async (tenant) => {
-    try {
-      await markDepositPaid(propertyId, tenant._id, true, tenant.depositAmount)
-      refetch()
-      toast(`Deposit ₹${(tenant.depositAmount ?? 0).toLocaleString('en-IN')} marked as collected`, 'success')
-    } catch (err) { toast(err.response?.data?.message || 'Failed to collect deposit', 'error') }
-  }
-
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
@@ -4878,9 +4934,8 @@ const Tenants = () => {
       {/* ── Header ── */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-slate-800 leading-tight">Tenants</h2>
           {allTenants.length > 0 && (
-            <p className="text-sm text-slate-400 mt-0.5">
+            <p className="text-sm text-slate-400">
               {stats.active} active · {stats.notice > 0 ? `${stats.notice} on notice · ` : ''}{stats.vacated} vacated
             </p>
           )}
@@ -4959,7 +5014,7 @@ const Tenants = () => {
                         tenant={t}
                         onView={setProfile}
                         onQuickPay={openQuickPay}
-                        onDepositCollect={handleQuickDepositCollect}
+
                       />
                     ))}
                   </tbody>

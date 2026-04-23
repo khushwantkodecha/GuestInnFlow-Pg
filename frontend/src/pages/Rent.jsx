@@ -1,10 +1,10 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  CheckCircle2, Zap, AlertTriangle, Clock, TrendingUp,
+  CheckCircle2, Zap, AlertTriangle, TrendingUp,
   CircleDollarSign, MessageCircle, Check,
   Search, X, RotateCcw, BedDouble, IndianRupee,
-  Calendar, ChevronRight, ChevronLeft, Download, ArrowDownCircle,
+  ChevronRight, ChevronLeft, Download, ArrowDownCircle,
   ArrowUpCircle, Wallet, CreditCard, Plus, Printer,
   ExternalLink, Building2, Home, ArrowUpDown, Shield,
 } from 'lucide-react'
@@ -828,12 +828,6 @@ const TenantLedger = ({ tenant, propertyId, onCollect }) => {
                 {depositLoading ? 'Applying…' : `Use Deposit · ${fmt(Math.min(depositBalance, currentBalance))}`}
               </button>
             )}
-            <button
-              onClick={() => setChargeOpen(true)}
-              className="flex items-center justify-center gap-2 w-full rounded-xl bg-white hover:bg-orange-50 border border-orange-200 text-orange-600 text-xs font-semibold py-2 transition-colors"
-            >
-              <Plus size={12} /> Add Charge
-            </button>
           </div>
         )}
 
@@ -876,6 +870,14 @@ const TenantLedger = ({ tenant, propertyId, onCollect }) => {
                   const canReverse   = e.referenceType === 'payment_received' && e.referenceId
                   const isConfirming = confirmReverse?.entryId === e._id
 
+                  // Detect room-change entries that baked an advance into one ledger record
+                  const advMatch   = e.referenceType === 'rent_generated'
+                    && e.description?.match(/·\s*₹([\d,]+)\s*advance applied/)
+                  const advAmt     = advMatch ? parseInt(advMatch[1].replace(/,/g, ''), 10) : 0
+                  const mainDesc   = advAmt > 0
+                    ? e.description.replace(/\s*·\s*₹[\d,]+\s*advance applied/, '')
+                    : (e.description ?? (isDebit ? 'Rent charged' : 'Payment received'))
+
                   return (
                     <div key={e._id ?? idx} className="flex gap-3 items-start">
                       {/* Icon dot */}
@@ -894,7 +896,7 @@ const TenantLedger = ({ tenant, propertyId, onCollect }) => {
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-slate-700 leading-tight">
-                              {e.description ?? (isDebit ? 'Rent charged' : 'Payment received')}
+                              {mainDesc}
                             </p>
                             <p className="text-[10px] text-slate-400 mt-0.5">{fdateTime(e.createdAt)}</p>
                           </div>
@@ -915,6 +917,17 @@ const TenantLedger = ({ tenant, propertyId, onCollect }) => {
                             )}
                           </div>
                         </div>
+
+                        {/* Advance-applied sub-row for room-change entries */}
+                        {advAmt > 0 && (
+                          <div className="mt-2 flex items-center justify-between rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5">
+                            <span className="flex items-center gap-1.5 text-[11px] text-emerald-700">
+                              <ArrowUpCircle size={11} />
+                              Advance applied
+                            </span>
+                            <span className="text-[11px] font-bold text-emerald-600 tabular-nums">−{fmt(advAmt)}</span>
+                          </div>
+                        )}
 
                         {/* Inline reversal confirm */}
                         {isConfirming && (
@@ -1067,14 +1080,14 @@ const NoPropertyState = () => {
   ]
 
   return (
-    <div className="flex items-center justify-center px-4 py-10 min-h-[60vh]">
-      <div className="w-full max-w-xl">
+    <div className="px-4 py-8 pb-24 md:pb-8">
+      <div className="w-full max-w-xl mx-auto">
 
         {/* Hero */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center h-20 w-20 rounded-3xl mb-5 mx-auto"
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-3xl mb-5 mx-auto"
             style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
-            <CreditCard size={36} style={{ color: '#60C3AD' }} />
+            <CreditCard size={32} style={{ color: '#60C3AD' }} />
           </div>
           <h2 className="text-xl font-bold text-slate-800">No property selected</h2>
           <p className="text-sm text-slate-400 mt-2 max-w-xs mx-auto leading-relaxed">
@@ -1084,14 +1097,14 @@ const NoPropertyState = () => {
 
         {/* CTA */}
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-5">
-          <div className="px-5 py-4 flex items-center justify-between gap-4">
+          <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-800">No properties yet?</p>
               <p className="text-xs text-slate-400 mt-0.5">Add a property, add rooms &amp; tenants, then collect rent</p>
             </div>
             <button
               onClick={() => navigate('/properties')}
-              className="shrink-0 inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+              className="w-full sm:w-auto shrink-0 inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'linear-gradient(135deg, #60C3AD 0%, #4aa897 100%)' }}
             >
               <Building2 size={14} /> Add Property
@@ -1104,7 +1117,8 @@ const NoPropertyState = () => {
               Your property
               <ChevronRight size={10} className="text-slate-300" />
             </div>
-            <span>shows in the sidebar panel on the left</span>
+            <span className="md:hidden">Already have a property? Switch from the <span className="font-semibold text-slate-500">More</span> tab below.</span>
+            <span className="hidden md:inline">shows in the sidebar panel on the left</span>
           </div>
         </div>
 
@@ -1442,9 +1456,8 @@ const Rent = () => {
       {/* ── Header ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-slate-800 leading-tight">Rent Collection</h2>
           {allRents.length > 0 && (
-            <p className="text-sm text-slate-400 mt-0.5">
+            <p className="text-sm text-slate-400">
               {counts.paid} paid · {counts.pending} pending · {counts.overdue} overdue
             </p>
           )}
@@ -1709,6 +1722,7 @@ const Rent = () => {
           subtitle={ledgerTenant.name}
           onClose={() => setLedgerTenant(null)}
           closeOnBackdrop={false}
+          width="max-w-2xl"
         >
           <TenantLedger
             tenant={ledgerTenant}
@@ -1728,6 +1742,7 @@ const Rent = () => {
           subtitle={profileTenant.name}
           onClose={() => setProfileTenant(null)}
           width="max-w-2xl"
+          bodyClassName="flex-1 overflow-hidden flex flex-col"
         >
           <TenantProfile
             tenant={profileTenant}

@@ -162,7 +162,8 @@ const createTenant = asyncHandler(async (req, res) => {
   // PATCH /rooms/:roomId/beds/:id/assign so that recalculateRoomRent runs and
   // the first billing cycle is generated correctly.
   const tenantData = { ...req.body };
-  delete tenantData.bedId;   // silently strip if caller sends it by mistake
+  delete tenantData.bedId;    // silently strip — bed assignment goes through PATCH .../assign
+  delete tenantData.status;   // always 'incomplete' at creation; assignBed promotes to 'active'
 
   // ── Duplicate phone guard ────────────────────────────────────────────────
   if (tenantData.phone) {

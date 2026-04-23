@@ -288,6 +288,20 @@ const ensureCurrentCycleRentForTenant = async (tenantId, propertyId) => {
 
     await Tenant.findByIdAndUpdate(tenantId, { ledgerBalance: newBalance }, { session });
 
+    // Apply any existing advance credit to this record's paidAmount so the
+    // record stays consistent with the ledger.
+    // advance = max(0, -prevBalance); advanceApplied = min(advance, chargeAmount).
+    // Equivalent form used here: max(0, chargeAmount − max(0, newBalance)).
+    if (prevBalance < 0) {
+      const advanceApplied = Math.max(0, chargeAmount - Math.max(0, newBalance));
+      if (advanceApplied > 0) {
+        record.paidAmount = advanceApplied;
+        record.status     = advanceApplied >= chargeAmount ? 'paid' : 'partial';
+        if (advanceApplied >= chargeAmount) record.paymentDate = new Date();
+        await record.save({ session });
+      }
+    }
+
     createdRecord = record;
   });
 
@@ -308,7 +322,8 @@ const ensureCurrentCycleRentForTenant = async (tenantId, propertyId) => {
 const generateRentForProperty = async (propertyId, month, year) => {
   const activeTenants = await Tenant.find({
     property: propertyId,
-    status: { $in: ['active', 'notice'] },
+    status:   { $in: ['active', 'notice'] },
+    bed:      { $ne: null },   // never generate rent for tenants without a bed
   }).lean();
 
   if (!activeTenants.length) {
@@ -411,6 +426,19 @@ const generateRentForProperty = async (propertyId, month, year) => {
       }], { session });
 
       await Tenant.findByIdAndUpdate(tenant._id, { ledgerBalance: newBalance }, { session });
+
+      // Apply any existing advance credit to paidAmount so the record stays
+      // consistent with the ledger. Same formula as changeBed if-branch and
+      // ensureCurrentCycleRentForTenant — see that function for derivation.
+      if (prevBalance < 0) {
+        const advanceApplied = Math.max(0, chargeAmount - Math.max(0, newBalance));
+        if (advanceApplied > 0) {
+          record.paidAmount = advanceApplied;
+          record.status     = advanceApplied >= chargeAmount ? 'paid' : 'partial';
+          if (advanceApplied >= chargeAmount) record.paymentDate = new Date();
+          await record.save({ session });
+        }
+      }
 
       createdRecord = record;
     });

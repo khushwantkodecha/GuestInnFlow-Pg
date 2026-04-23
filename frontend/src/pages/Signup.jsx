@@ -3,10 +3,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   Building2, Eye, EyeOff, CheckCircle2, ArrowRight,
   Shield, Lock,
-  User, Mail, KeyRound
+  User, Mail, Phone, KeyRound, Clock,
 } from 'lucide-react'
 import { signup } from '../api/auth'
 import { useAuth } from '../context/AuthContext'
+import PhoneInput  from '../components/ui/PhoneInput'
 
 
 
@@ -31,11 +32,12 @@ const Signup = () => {
   const { loginUser } = useAuth()
   const navigate = useNavigate()
 
-  const [form, setForm] = useState({ name: '', email: '', password: '' })
+  const [form, setForm] = useState({ name: '', phone: '', email: '', password: '' })
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [mounted, setMounted] = useState(false)
+  const [pending, setPending] = useState(false)
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -44,6 +46,10 @@ const Signup = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    if (!form.phone || !/^\+\d{7,15}$/.test(form.phone.trim())) {
+      setError('Enter a valid mobile number with country code')
+      return
+    }
     if (form.password.length < 6) {
       setError('Password must be at least 6 characters')
       return
@@ -52,8 +58,12 @@ const Signup = () => {
     setLoading(true)
     try {
       const res = await signup(form)
-      loginUser(res.data.token, res.data.data)
-      navigate('/dashboard')
+      if (res.data.pending) {
+        setPending(true)
+      } else {
+        loginUser(res.data.token, res.data.data)
+        navigate('/dashboard')
+      }
     } catch (err) {
       setError(err.response?.data?.message || 'Signup failed. Please try again.')
     } finally {
@@ -88,7 +98,7 @@ const Signup = () => {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur-sm border border-white/20">
               <Building2 size={20} className="text-white" />
             </div>
-            <span className="text-white font-semibold text-lg tracking-tight">TenantInnFlow</span>
+            <span className="text-white font-semibold text-lg tracking-tight">DormAxis</span>
           </div>
         </div>
 
@@ -116,7 +126,7 @@ const Signup = () => {
 
         {/* Footer */}
         <div className="relative z-10 px-12 pb-8">
-          <p className="text-[11px] text-white/40">© {new Date().getFullYear()} TenantInnFlow · All rights reserved</p>
+          <p className="text-[11px] text-white/40">© {new Date().getFullYear()} DormAxis · All rights reserved</p>
         </div>
       </div>
 
@@ -129,7 +139,7 @@ const Signup = () => {
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-600">
               <Building2 size={18} className="text-white" />
             </div>
-            <span className="font-semibold text-gray-900">TenantInnFlow</span>
+            <span className="font-semibold text-gray-900">DormAxis</span>
           </div>
           <div className="hidden lg:block" />
         </div>
@@ -156,6 +166,30 @@ const Signup = () => {
 
             {/* Card */}
             <div className="signup-form-card">
+
+              {/* ── Pending activation screen ── */}
+              {pending ? (
+                <div className="flex flex-col items-center text-center py-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl mb-5"
+                    style={{ background: 'rgba(96,195,173,0.12)', border: '1.5px solid rgba(96,195,173,0.25)' }}>
+                    <Clock size={28} style={{ color: '#45a793' }} />
+                  </div>
+                  <h2 className="text-[18px] font-bold text-gray-900 tracking-tight">Account created!</h2>
+                  <p className="mt-2 text-sm text-gray-500 leading-relaxed max-w-xs">
+                    Your account is pending activation. Please contact the product owner to enable access.
+                  </p>
+                  <div className="mt-5 w-full rounded-xl bg-amber-50 border border-amber-200 px-4 py-3.5 text-left">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-amber-600 mb-1">Next step</p>
+                    <p className="text-sm text-amber-700 leading-relaxed">
+                      Reach out to your administrator and share your registered email or mobile number to get your account activated.
+                    </p>
+                  </div>
+                  <Link to="/login" className="mt-5 text-sm font-semibold" style={{ color: '#45a793' }}>
+                    Back to sign in
+                  </Link>
+                </div>
+              ) : (
+              <>
               {/* Error */}
               {error && (
                 <div className="mb-5 flex items-start gap-3 rounded-xl bg-red-50 border border-red-100 px-4 py-3.5 text-sm text-red-700 animate-pageIn">
@@ -184,6 +218,20 @@ const Signup = () => {
                     required
                     autoFocus
                     autoComplete="name"
+                  />
+                </div>
+
+                {/* ── Phone ── */}
+                <div className="signup-field-group">
+                  <label className="signup-label">
+                    <Phone size={14} className="text-gray-400" />
+                    Mobile Number
+                  </label>
+                  <PhoneInput
+                    value={form.phone}
+                    onChange={v => set('phone', v)}
+                    placeholder="Mobile number"
+                    className="signup-phone-input"
                   />
                 </div>
 
@@ -282,6 +330,8 @@ const Signup = () => {
                 <Shield size={12} />
                 <span>Your data is encrypted and secure</span>
               </div>
+              </>
+              )}
             </div>
 
             {/* Sign-in link */}
@@ -419,6 +469,29 @@ const Signup = () => {
           border-color: #60c3ad;
           background: #fff;
           box-shadow: 0 0 0 3px rgba(96,195,173,.1);
+        }
+
+        /* ── PhoneInput inside signup form ── */
+        .signup-phone-input {
+          border-radius: 12px !important;
+          border: 1.5px solid #e5e7eb !important;
+          background: #f9fafb !important;
+          font-size: 14px;
+        }
+        .signup-phone-input:focus-within {
+          border-color: #60c3ad !important;
+          background: #fff !important;
+          box-shadow: 0 0 0 3px rgba(96,195,173,.1) !important;
+        }
+        .signup-phone-input input {
+          background: transparent !important;
+          font-size: 14px;
+          padding: 11px 14px;
+        }
+        .signup-phone-input select {
+          background: transparent !important;
+          font-size: 13px;
+          border-right-color: #e5e7eb !important;
         }
 
         /* ── Submit button ── */

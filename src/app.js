@@ -3,7 +3,8 @@ const express = require('express');
 const connectDB = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
 
-const authRoutes = require('./routes/authRoutes');
+const authRoutes       = require('./routes/authRoutes');
+const superAdminRoutes = require('./routes/superAdminRoutes');
 const propertyRoutes = require('./routes/propertyRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const tenantRoutes = require('./routes/tenantRoutes');
@@ -55,7 +56,8 @@ if (process.env.NODE_ENV === 'production') {
     message: { success: false, message: 'Too many requests, please try again later.' },
   });
 
-  app.use('/api/auth', authLimiter);
+  app.use('/api/auth',            authLimiter);
+  app.use('/api/superadmin/login', authLimiter);
   app.use('/api', apiLimiter);
 }
 
@@ -63,7 +65,8 @@ if (process.env.NODE_ENV === 'production') {
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // API routes
-app.use('/api/auth', authRoutes);
+app.use('/api/auth',       authRoutes);
+app.use('/api/superadmin', superAdminRoutes);
 app.use('/api/properties', propertyRoutes);
 app.use('/api/properties/:propertyId/rooms', roomRoutes);
 app.use('/api/properties/:propertyId/tenants', tenantRoutes);

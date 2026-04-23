@@ -1880,66 +1880,113 @@ const changeBed = asyncHandler(async (req, res) => {
   const updatedTargetBed = await Bed.findById(targetBed._id)
     .populate('tenant', 'name phone status rentAmount billingSnapshot ledgerBalance');
 
-  // ── Reset current billing cycle to new rent (no proration) ──────────────────
-  // 1. Updates the current month's open RentPayment.amount to the new rent.
-  // 2. If the amount changed, writes a LedgerEntry adjustment so getTenantLedger
-  //    (the source of truth) stays in sync — this is the field the profile reads.
-  // 3. Recomputes tenant.ledgerBalance from all open records.
-  // Past paid records are never touched.
+  // ── Reset current billing cycle to new rent ───────────────────────────────
+  // On room change, the existing billing record is updated to the new rent.
+  // The ledger receives a delta entry (newRent − unearnedOldDebt) so that
+  // unpaid old rent is not double-counted alongside the new charge.
+  //   1. Resolve billing-cycle month/year (matches ensureCurrentCycleRentForTenant).
+  //   2. Find current cycle record (ANY status).
+  //   3. Reset record: amount=newRent, paidAmount=0, status='pending'.
+  //   4. Write ledger delta only when non-zero; type debit or credit accordingly.
+  //   5. Apply advance credit (max(0,-prevBalance)) to paidAmount on the record.
   const newRent = updatedTargetBed?.tenant?.rentAmount ?? 0;
   try {
-    const now      = new Date();
-    const curMonth = now.getMonth() + 1;
-    const curYear  = now.getFullYear();
+    // Use billing-cycle month/year — must match ensureCurrentCycleRentForTenant
+    // which also uses this function. Using calendar month caused a mismatch when
+    // billingDay > today's date (cycle is still the previous calendar month),
+    // leading to the wrong record being looked up (or missed entirely), and
+    // ensureCurrentCycleRentForTenant later creating a second open record.
+    const cycle    = rentService.getCurrentBillingCycleMonthYear(tenant.billingStartDate, tenant.checkInDate);
+    const curMonth = cycle?.month ?? (new Date().getMonth() + 1);
+    const curYear  = cycle?.year  ?? new Date().getFullYear();
 
+    // Capture balance BEFORE billing adjustment (includes prior payments for this cycle)
+    const prevLedgerBalance = await rentService.getTenantBalance(tenant._id);
+
+    // Any status — 'paid' records must be reopened when newRent > paidAmount
     const currentRecord = await RentPayment.findOne({
       tenant: tenant._id,
       month:  curMonth,
       year:   curYear,
-      status: { $in: ['pending', 'partial', 'overdue'] },
     });
 
     if (currentRecord) {
-      const oldBilledAmount = currentRecord.amount;
-      const delta           = newRent - oldBilledAmount; // positive = increase, negative = decrease
+      // ── Close old billing, open fresh billing at new rate ─────────────────────
+      //
+      // KEY: we write only the NET ledger delta (not a full +newRent debit).
+      // Reason: generateRentForProperty already wrote a +oldBilledAmount debit for
+      // this cycle. Writing +newRent on top would count the old charge AND the new
+      // charge simultaneously (double-billing when old rent was unpaid).
+      //
+      // Correct delta = newRent − unearnedOldDebt
+      //   unearnedOldDebt = oldBilledAmount − oldPaidAmount
+      //                   = the portion of the OLD charge not yet settled
+      //
+      // Edge-cases:
+      //   old rent fully paid  → unearnedOldDebt=0 → delta=+newRent → balance += newRent
+      //   old rent fully unpaid → unearnedOldDebt=oldAmount → delta=newRent−oldAmount
+      //   delta=0 (same amt, unpaid) → no ledger entry, just reset the record
+      const oldBilledAmount  = currentRecord.amount;
+      const oldPaidAmount    = currentRecord.paidAmount ?? 0;
+      const unearnedOldDebt  = Math.max(0, oldBilledAmount - oldPaidAmount);
+      const ledgerDelta      = newRent - unearnedOldDebt;
+      const newLedgerBalance = prevLedgerBalance + ledgerDelta;
 
-      currentRecord.amount = newRent;
-      await currentRecord.save(); // pre-save hook recalculates .balance
+      // advance = pure credit the tenant holds BEFORE this adjustment
+      const advance        = Math.max(0, -prevLedgerBalance);
+      const advanceApplied = newRent > 0 ? Math.min(advance, newRent) : 0;
 
-      // Keep LedgerEntry (source of truth) in sync with the billing change
-      if (delta !== 0) {
-        const prevLedgerBalance = await rentService.getTenantBalance(tenant._id);
-        const adjustedBalance   = prevLedgerBalance + delta;
+      // Step 1 — reset the record to a clean slate for the new rent
+      currentRecord.amount     = newRent;
+      currentRecord.paidAmount = 0;
+      currentRecord.status     = 'pending';
+      await currentRecord.save(); // pre-save hook: balance = newRent
+
+      // Step 2 — write a delta LedgerEntry (skip when delta=0 to avoid noise)
+      if (ledgerDelta !== 0) {
+        const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        let description = `Rent for ${MONTH_SHORT[curMonth - 1]} ${curYear}: Room ${room.roomNumber} → Room ${targetRoom.roomNumber} (₹${fromRent} → ₹${newRent})`;
+        if (advanceApplied > 0) {
+          description += ` · ₹${advanceApplied} advance applied`;
+        }
 
         await LedgerEntry.create({
           tenant:        tenant._id,
           property:      req.params.propertyId,
-          type:          delta > 0 ? 'debit' : 'credit',
-          amount:        Math.abs(delta),
-          balanceAfter:  adjustedBalance,
-          referenceType: 'adjustment',
-          referenceId:   tenant._id,
-          description:   `Rent adjusted on room transfer: Room ${room.roomNumber} → Room ${targetRoom.roomNumber}`,
-        });
-
-        await Tenant.updateOne({ _id: tenant._id }, { ledgerBalance: adjustedBalance });
-        logger.info('bed.change.rent_reset', {
-          traceId, tenantId: tenant._id,
-          month: curMonth, year: curYear,
-          oldBilledAmount, newRent, delta, adjustedBalance,
+          type:          ledgerDelta > 0 ? 'debit' : 'credit',
+          amount:        Math.abs(ledgerDelta),
+          balanceAfter:  newLedgerBalance,
+          referenceType: 'rent_generated',
+          referenceId:   currentRecord._id,
+          description,
         });
       }
-    } else {
-      // No current-cycle record yet — just sync ledgerBalance from open records
-      const openRecords = await RentPayment.find({
-        tenant: tenant._id,
-        status: { $in: ['pending', 'partial', 'overdue'] },
-      }).select('amount paidAmount').lean();
 
-      const newLedgerBalance = openRecords.reduce(
-        (sum, r) => sum + (r.amount - (r.paidAmount ?? 0)), 0
-      );
       await Tenant.updateOne({ _id: tenant._id }, { ledgerBalance: newLedgerBalance });
+      logger.info('bed.change.rent_reset', {
+        traceId, tenantId: tenant._id,
+        month: curMonth, year: curYear,
+        prevLedgerBalance, newRent, oldBilledAmount, oldPaidAmount,
+        unearnedOldDebt, ledgerDelta, newLedgerBalance, advance, advanceApplied,
+      });
+
+      // Step 3 — apply advance to paidAmount (record-only; ledger already reflects it)
+      if (advanceApplied > 0) {
+        currentRecord.paidAmount = advanceApplied;
+        currentRecord.status     = advanceApplied >= newRent ? 'paid' : 'partial';
+        if (advanceApplied >= newRent) currentRecord.paymentDate = new Date();
+        await currentRecord.save();
+      }
+    } else {
+      // ── No billing record for this cycle yet ─────────────────────────────────
+      // Rent will be generated at the correct new rate by the cron /
+      // ensureCurrentCycleRentForTenant. No ledger entry is written here.
+      //
+      // Preserve prevLedgerBalance in the cached field — do NOT sync to the sum
+      // of open records (which would be 0 when all prior records are paid, silently
+      // wiping any advance credit the tenant holds). The ledger is authoritative;
+      // the Tenant.ledgerBalance cache must reflect it at all times.
+      await Tenant.updateOne({ _id: tenant._id }, { ledgerBalance: prevLedgerBalance });
     }
   } catch (err) {
     logger.warn('bed.change.rent_reset_failed', { traceId, tenantId: tenant._id, error: err.message });

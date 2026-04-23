@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
+import DormAxisIcon from '../ui/DormAxisIcon'
 import {
   LayoutDashboard,
   Building2,
@@ -156,12 +157,12 @@ const Sidebar = ({ open, onClose, collapsed, onToggleCollapse }) => {
         {/* ── Logo ─────────────────────────────────────────────────────────── */}
         <div className={`flex h-16 items-center sb-divider-b ${collapsed ? 'justify-center px-2' : 'px-4'}`}>
           <div className="sb-logo-icon shrink-0">
-            <Building2 size={15} style={{ color: '#60C3AD' }} />
+            <DormAxisIcon size={18} color="#60C3AD" />
           </div>
           {!collapsed && (
             <div className="ml-3">
               <p className="text-[14px] font-bold tracking-tight leading-none" style={{ color: '#334155' }}>
-                TenantInnFlow
+                DormAxis
               </p>
               <p className="text-[9px] font-semibold uppercase tracking-widest leading-tight mt-0.5 text-slate-400">
                 PG / Hostel

@@ -23,6 +23,8 @@ const userSchema = new mongoose.Schema(
     },
     phone: {
       type: String,
+      required: [true, 'Phone number is required'],
+      unique: true,
       trim: true,
     },
     role: {
@@ -32,7 +34,12 @@ const userSchema = new mongoose.Schema(
     },
     isActive: {
       type: Boolean,
-      default: true,
+      default: false,
+    },
+    plan: {
+      type: String,
+      enum: ['standard', 'pro', 'elite', 'enterprise'],
+      default: 'standard',
     },
   },
   { timestamps: true }
