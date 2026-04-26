@@ -3,7 +3,7 @@ import {
   Building2, BedDouble, Users, CreditCard,
   AlertTriangle, ChevronRight, RefreshCw,
   TrendingUp, TrendingDown, Plus,
-  IndianRupee, UserPlus,
+  IndianRupee,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { getPropertyDashboard, getRecentActivity } from '../api/dashboard'
@@ -62,24 +62,65 @@ const DonutChart = ({ occupied, reserved, total }) => {
   )
 }
 
-// ── Quick Actions ─────────────────────────────────────────────────────────────
-const QuickActions = ({ navigate }) => {
-  const actions = [
-    { icon: IndianRupee, label: 'Collect Payment',  desc: 'Collect rent',  to: '/tenants', bg: 'rgba(96,195,173,0.10)', color: '#60C3AD' },
-    { icon: UserPlus,    label: 'Add New Tenant',   desc: 'Register new',  to: '/tenants', bg: 'rgba(59,130,246,0.10)', color: '#3B82F6' },
-    { icon: Plus,        label: 'Add Extra Charge', desc: 'Bill a charge', to: '/tenants', bg: 'rgba(245,158,11,0.10)', color: '#F59E0B' },
+// ── Stats Row ─────────────────────────────────────────────────────────────────
+const StatsRow = ({ beds, tenants, financials, navigate }) => {
+  const { total: totalBeds, occupied, vacant, reserved } = beds
+  const { active, onNotice, newCheckInsThisMonth } = tenants
+  const { collectedRent, pendingDues, collectionRate } = financials
+
+  const allClear = pendingDues === 0
+
+  const stats = [
+    {
+      icon: Users,
+      label: 'Active Tenants',
+      value: active,
+      sub: onNotice > 0 ? `${onNotice} on notice` : `${newCheckInsThisMonth} new this month`,
+      color: '#60C3AD',
+      bg: 'rgba(96,195,173,0.10)',
+      to: '/tenants',
+    },
+    {
+      icon: BedDouble,
+      label: 'Beds Occupied',
+      value: `${occupied}/${totalBeds}`,
+      sub: vacant > 0 ? `${vacant} vacant` : reserved > 0 ? `${reserved} reserved` : 'Fully occupied',
+      color: '#3B82F6',
+      bg: 'rgba(59,130,246,0.10)',
+      to: '/rooms',
+    },
+    {
+      icon: IndianRupee,
+      label: 'Collected',
+      value: fmt(collectedRent),
+      sub: `${collectionRate}% collection rate`,
+      color: '#10B981',
+      bg: 'rgba(16,185,129,0.10)',
+      to: '/rent',
+    },
+    {
+      icon: CreditCard,
+      label: 'Pending Dues',
+      value: allClear ? 'Clear' : fmt(pendingDues),
+      sub: allClear ? 'All rents collected' : 'Outstanding balance',
+      color: allClear ? '#10B981' : '#F59E0B',
+      bg: allClear ? 'rgba(16,185,129,0.10)' : 'rgba(245,158,11,0.10)',
+      to: '/rent',
+    },
   ]
+
   return (
-    <div className="grid grid-cols-3 gap-3">
-      {actions.map(({ icon: Icon, label, desc, to, bg, color }) => (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {stats.map(({ icon: Icon, label, value, sub, color, bg, to }) => (
         <button key={label} type="button" onClick={() => navigate(to)}
-          className="flex flex-col items-center gap-2.5 p-4 rounded-2xl bg-white border border-slate-100 hover:border-slate-200 hover:shadow-sm active:scale-95 transition-all text-center">
-          <div className="h-10 w-10 rounded-xl flex items-center justify-center" style={{ background: bg, color }}>
-            <Icon size={18} />
+          className="flex flex-col gap-3 p-4 rounded-2xl bg-white border border-slate-100 hover:border-slate-200 hover:shadow-sm active:scale-95 transition-all text-left">
+          <div className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: bg }}>
+            <Icon size={16} style={{ color }} />
           </div>
           <div>
-            <p className="text-xs font-bold text-slate-700">{label}</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">{desc}</p>
+            <p className="text-lg font-bold text-slate-800 tabular-nums leading-tight">{value}</p>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mt-1">{label}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">{sub}</p>
           </div>
         </button>
       ))}
@@ -694,8 +735,8 @@ const Dashboard = () => {
         </button>
       </div>
 
-      {/* Quick Actions */}
-      <QuickActions navigate={navigate} />
+      {/* Stats */}
+      <StatsRow beds={d.beds} tenants={d.tenants} financials={d.financials} navigate={navigate} />
 
       {/* Alerts */}
       <AlertsSection financials={d.financials} beds={d.beds} navigate={navigate} />

@@ -32,16 +32,8 @@ const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
       className={`fixed right-0 top-0 z-20 flex h-16 items-center justify-between px-4 sm:px-6 transition-all duration-300 bg-white/95 backdrop-blur-md border-b border-slate-200 left-0 ${sidebarCollapsed ? 'md:left-[68px]' : 'md:left-60'}`}
     >
 
-      {/* Left: hamburger + page title */}
+      {/* Left: page title */}
       <div className="flex items-center gap-3">
-        {/* Hamburger hidden on mobile — bottom nav handles navigation on small screens */}
-        <button
-          onClick={onOpenSidebar}
-          className="hidden rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
-          aria-label="Open menu"
-        >
-          <Menu size={20} />
-        </button>
         <h1 className="text-base font-bold text-slate-800 tracking-tight">{title}</h1>
       </div>
 

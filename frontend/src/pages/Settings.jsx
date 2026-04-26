@@ -133,10 +133,12 @@ const ProfilePanel = ({ user, onUpdate }) => {
           }
         </div>
         <div>
-          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Email</label>
-          <div className="w-full rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-400 flex items-center justify-between">
-            <span>{user?.email ?? '—'}</span>
-            <span className="text-[10px] bg-slate-200 text-slate-500 px-2 py-0.5 rounded-full font-medium">Cannot change</span>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Email</label>
+            <span className="text-[10px] font-medium text-slate-400">Read only</span>
+          </div>
+          <div className="w-full rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-400 truncate">
+            {user?.email ?? '—'}
           </div>
         </div>
 
@@ -681,13 +683,19 @@ const SECTIONS = [
 
 // ── Main ───────────────────────────────────────────────────────────────────────
 const Settings = () => {
-  const { user, logout, updateUser }           = useAuth()
-  const { selectedProperty, properties }       = useProperty()
-  const navigate                      = useNavigate()
-  const [active, setActive]           = useState('profile')
+  const { user, logout, updateUser }     = useAuth()
+  const { selectedProperty, properties } = useProperty()
+  const navigate                         = useNavigate()
+  const [active, setActive]              = useState('profile')
+  const [mobilePanel, setMobilePanel]    = useState(false)
   const [confirmLogout, setConfirmLogout] = useState(false)
 
   const handleLogout = () => { logout(); navigate('/login') }
+
+  const selectSection = (id) => {
+    setActive(id)
+    setMobilePanel(true)
+  }
 
   const renderPanel = () => {
     switch (active) {
@@ -702,50 +710,114 @@ const Settings = () => {
   }
 
   return (
-    <div className="flex gap-6 max-w-4xl" style={{ minHeight: 'calc(100vh - 120px)' }}>
+    <div className="max-w-4xl">
 
-      {/* Left nav */}
-      <div className="w-52 shrink-0">
-        <div className="card overflow-hidden sticky top-6">
-          <nav className="p-2 space-y-0.5">
-            {SECTIONS.map(({ id, label, icon: Icon }) => {
-              const isActive = active === id
-              return (
-                <button key={id} onClick={() => setActive(id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-150 ${
-                    isActive ? 'text-[#45a793] font-semibold' : 'text-slate-500 font-medium hover:text-slate-700 hover:bg-slate-50'
-                  }`}
-                  style={isActive ? { background: 'rgba(96,195,173,0.10)' } : {}}>
-                  <span className="shrink-0 flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
-                    style={isActive
-                      ? { background: 'rgba(96,195,173,0.15)', color: '#60C3AD' }
-                      : { background: '#f1f5f9', color: '#94a3b8' }}>
-                    <Icon size={14} />
-                  </span>
-                  <span className="text-[13px] truncate">{label}</span>
-                  {isActive && <ChevronRight size={13} className="ml-auto shrink-0" style={{ color: '#60C3AD' }} />}
-                </button>
-              )
-            })}
-          </nav>
-
-          <div className="border-t border-slate-100 p-2">
-            <button onClick={() => setConfirmLogout(true)}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-slate-400 font-medium hover:text-red-500 hover:bg-red-50 transition-all duration-150 group">
-              <span className="shrink-0 flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 group-hover:bg-red-100 transition-colors">
-                <LogOut size={14} />
-              </span>
-              <span className="text-[13px]">Sign out</span>
-            </button>
+      {/* ── DESKTOP: two-column layout ── */}
+      <div className="hidden md:flex gap-6" style={{ minHeight: 'calc(100vh - 120px)' }}>
+        {/* Left nav */}
+        <div className="w-52 shrink-0">
+          <div className="card overflow-hidden sticky top-6">
+            <nav className="p-2 space-y-0.5">
+              {SECTIONS.map(({ id, label, icon: Icon }) => {
+                const isActive = active === id
+                return (
+                  <button key={id} onClick={() => setActive(id)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-150 ${
+                      isActive ? 'text-[#45a793] font-semibold' : 'text-slate-500 font-medium hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                    style={isActive ? { background: 'rgba(96,195,173,0.10)' } : {}}>
+                    <span className="shrink-0 flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
+                      style={isActive
+                        ? { background: 'rgba(96,195,173,0.15)', color: '#60C3AD' }
+                        : { background: '#f1f5f9', color: '#94a3b8' }}>
+                      <Icon size={14} />
+                    </span>
+                    <span className="text-[13px] truncate">{label}</span>
+                    {isActive && <ChevronRight size={13} className="ml-auto shrink-0" style={{ color: '#60C3AD' }} />}
+                  </button>
+                )
+              })}
+            </nav>
+            <div className="border-t border-slate-100 p-2">
+              <button onClick={() => setConfirmLogout(true)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-slate-400 font-medium hover:text-red-500 hover:bg-red-50 transition-all duration-150 group">
+                <span className="shrink-0 flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 group-hover:bg-red-100 transition-colors">
+                  <LogOut size={14} />
+                </span>
+                <span className="text-[13px]">Sign out</span>
+              </button>
+            </div>
           </div>
+        </div>
+        {/* Right panel */}
+        <div className="flex-1 min-w-0">
+          <div className="card p-6">{renderPanel()}</div>
         </div>
       </div>
 
-      {/* Right panel */}
-      <div className="flex-1 min-w-0">
-        <div className="card p-6">
-          {renderPanel()}
-        </div>
+      {/* ── MOBILE: list → panel navigation ── */}
+      <div className="md:hidden">
+        {!mobilePanel ? (
+          /* List view */
+          <div className="space-y-3">
+            {/* User card */}
+            <div className="bg-white rounded-2xl border border-slate-200 px-4 py-4 flex items-center gap-3 shadow-sm">
+              <div className="h-12 w-12 rounded-2xl flex items-center justify-center text-base font-bold text-white shrink-0"
+                style={{ background: 'linear-gradient(135deg,#60C3AD 0%,#4aa897 100%)' }}>
+                {(user?.name ?? '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-slate-800 truncate">{user?.name ?? '—'}</p>
+                <p className="text-xs text-slate-400 truncate">{user?.email ?? '—'}</p>
+              </div>
+              <span className="flex items-center gap-1 rounded-full px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-[10px] font-semibold text-emerald-600 shrink-0">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                Active
+              </span>
+            </div>
+
+            {/* Settings items */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden divide-y divide-slate-100">
+              {SECTIONS.map(({ id, label, icon: Icon }) => (
+                <button key={id} onClick={() => selectSection(id)}
+                  className="w-full flex items-center gap-3.5 px-4 py-3.5 text-left transition-colors active:bg-slate-50">
+                  <span className="shrink-0 flex h-9 w-9 items-center justify-center rounded-xl"
+                    style={{ background: 'rgba(96,195,173,0.10)', color: '#60C3AD' }}>
+                    <Icon size={16} />
+                  </span>
+                  <span className="flex-1 text-sm font-medium text-slate-700">{label}</span>
+                  <ChevronRight size={15} className="text-slate-300 shrink-0" />
+                </button>
+              ))}
+            </div>
+
+            {/* Sign out */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <button onClick={() => setConfirmLogout(true)}
+                className="w-full flex items-center gap-3.5 px-4 py-3.5 text-left transition-colors active:bg-red-50">
+                <span className="shrink-0 flex h-9 w-9 items-center justify-center rounded-xl bg-red-50">
+                  <LogOut size={16} className="text-red-500" />
+                </span>
+                <span className="flex-1 text-sm font-medium text-red-500">Sign out</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Panel view */
+          <div>
+            {/* Back bar */}
+            <button
+              onClick={() => setMobilePanel(false)}
+              className="flex items-center gap-1.5 text-primary-600 font-semibold text-sm mb-4"
+            >
+              <ChevronRight size={16} className="rotate-180" />
+              Settings
+            </button>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+              {renderPanel()}
+            </div>
+          </div>
+        )}
       </div>
 
       {confirmLogout && (

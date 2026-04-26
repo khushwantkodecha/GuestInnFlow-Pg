@@ -60,7 +60,7 @@ const AppLayout = () => {
       {/* Page content */}
       <main className={`${mainOffset} pt-16 transition-all duration-300`}>
         {/* pb-24 on mobile reserves space above the bottom nav bar */}
-        <div className="p-4 sm:p-6 pb-24 md:pb-6 animate-pageIn" key={pathname}>
+        <div className="p-4 sm:p-6 pb-28 md:pb-6 animate-pageIn" key={pathname}>
           <Outlet />
         </div>
       </main>

@@ -76,7 +76,15 @@
       "Bash(sed -n '250,254p' /Users/khushwantkodecha/Desktop/Work/PG-GuestInnFlow/src/models/Tenant.js)",
       "Bash(awk -F: '$2 > 1700 && $2 < 1800 {print}')",
       "Bash(awk -F: '$2 > 1680 && $2 < 1970 {print}')",
-      "Bash(awk -F: '$2 > 1960 {print}')"
+      "Bash(awk -F: '$2 > 1960 {print}')",
+      "Bash(npx --no-install vite build --mode development)",
+      "Bash(grep -E \"\\(package\\\\.json|\\\\.jsx$|\\\\.js$\\)\")",
+      "Bash(node_modules/.bin/eslint --max-warnings=100 src/pages/RoomsBeds.jsx)",
+      "Bash(node_modules/.bin/vite build *)",
+      "Bash(awk 'NR>=1452 && NR<=1540 && /const \\\\[/' /Users/khushwantkodecha/Desktop/Work/PG-GuestInnFlow/frontend/src/pages/RoomsBeds.jsx)",
+      "Bash(awk 'NR>=1540 && NR<=1570' /Users/khushwantkodecha/Desktop/Work/PG-GuestInnFlow/frontend/src/pages/RoomsBeds.jsx)",
+      "Bash(awk 'NR>=1535 && NR<=1560' /Users/khushwantkodecha/Desktop/Work/PG-GuestInnFlow/frontend/src/pages/RoomsBeds.jsx)",
+      "Bash(awk 'NR>=2250 && NR<=2260' /Users/khushwantkodecha/Desktop/Work/PG-GuestInnFlow/frontend/src/pages/RoomsBeds.jsx)"
     ]
   }
 }

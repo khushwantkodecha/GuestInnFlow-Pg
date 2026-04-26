@@ -1,10 +1,10 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   CheckCircle2, Zap, AlertTriangle, TrendingUp,
-  CircleDollarSign, MessageCircle, Check,
+  CircleDollarSign, MessageCircle,
   Search, X, RotateCcw, BedDouble, IndianRupee,
-  ChevronRight, ChevronLeft, Download, ArrowDownCircle,
+  ChevronRight, ChevronLeft, ArrowDownCircle,
   ArrowUpCircle, Wallet, CreditCard, Plus, Printer,
   ExternalLink, Building2, Home, ArrowUpDown, Shield,
 } from 'lucide-react'
@@ -55,7 +55,6 @@ const StatusPill = ({ status }) => {
 
 // ── Summary Cards ─────────────────────────────────────────────────────────────
 const SummaryCards = ({ rents }) => {
-  // chargesDue is per-tenant; deduplicate so each tenant counted only once
   const chargesMap = new Map()
   rents.forEach(r => {
     const tid = r.tenant?._id
@@ -69,63 +68,63 @@ const SummaryCards = ({ rents }) => {
 
   const totalOutstanding = rentDue + chargesDue
 
-  const collected  = rents.reduce((s, r) => r.status === 'paid' ? s + r.amount : s + (r.paidAmount ?? 0), 0)
-  const expected   = rents.reduce((s, r) => s + r.amount, 0)
+  const collected    = rents.reduce((s, r) => r.status === 'paid' ? s + r.amount : s + (r.paidAmount ?? 0), 0)
+  const expected     = rents.reduce((s, r) => s + r.amount, 0)
   const overdueCount = rents.filter(r => r.status === 'overdue').length
-  const rate       = expected > 0 ? Math.round((collected / expected) * 100) : 0
-
-
-  const cardBase = 'rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 cursor-default'
+  const rate         = expected > 0 ? Math.round((collected / expected) * 100) : 0
 
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 
-      {/* Card 1 — Rent Due */}
-      <div className={cardBase}>
-        <div className="h-9 w-9 rounded-xl border border-amber-100 bg-amber-50 flex items-center justify-center shrink-0">
-          <IndianRupee size={15} className="text-amber-500" />
+      {/* Rent Due */}
+      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
+        <div className="flex items-start justify-between mb-3">
+          <div className="h-8 w-8 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center shrink-0">
+            <IndianRupee size={14} className="text-amber-500" />
+          </div>
+          {overdueCount > 0 && (
+            <div className="flex items-center gap-1 rounded-full bg-red-50 border border-red-100 px-2 py-0.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+              <span className="text-[10px] font-bold text-red-600 leading-none">{overdueCount} overdue</span>
+            </div>
+          )}
         </div>
-        <div className="min-w-0 flex-1">
-          <p className={`text-[18px] font-bold leading-none tabular-nums ${rentDue > 0 ? 'text-amber-700' : 'text-slate-300'}`}>{fmt(rentDue)}</p>
-          <p className="text-[10px] text-slate-400 mt-0.5 font-medium">
-            Rent Due
-            {overdueCount > 0 && <span className="ml-1 text-red-500 font-semibold">· {overdueCount} overdue</span>}
-          </p>
-        </div>
+        <p className={`text-2xl font-bold tabular-nums leading-none ${rentDue > 0 ? 'text-amber-700' : 'text-slate-200'}`}>{fmt(rentDue)}</p>
+        <p className="text-[11px] font-medium text-slate-400 mt-1.5">Rent Due</p>
       </div>
 
-      {/* Card 2 — Charges Due */}
-      <div className={cardBase}>
-        <div className="h-9 w-9 rounded-xl border border-orange-100 bg-orange-50 flex items-center justify-center shrink-0">
-          <AlertTriangle size={15} className="text-orange-500" />
+      {/* Charges Due */}
+      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
+        <div className="h-8 w-8 rounded-xl bg-orange-50 border border-orange-100 flex items-center justify-center shrink-0 mb-3">
+          <AlertTriangle size={14} className="text-orange-500" />
         </div>
-        <div className="min-w-0 flex-1">
-          <p className={`text-[18px] font-bold leading-none tabular-nums ${chargesDue > 0 ? 'text-orange-600' : 'text-slate-300'}`}>{fmt(chargesDue)}</p>
-          <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Charges Due</p>
-        </div>
+        <p className={`text-2xl font-bold tabular-nums leading-none ${chargesDue > 0 ? 'text-orange-600' : 'text-slate-200'}`}>{fmt(chargesDue)}</p>
+        <p className="text-[11px] font-medium text-slate-400 mt-1.5">Charges Due</p>
       </div>
 
-      {/* Card 3 — Total Outstanding */}
-      <div className={cardBase}>
-        <div className="h-9 w-9 rounded-xl border border-primary-100 bg-primary-50 flex items-center justify-center shrink-0">
-          <CircleDollarSign size={15} className="text-primary-500" />
+      {/* Outstanding */}
+      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
+        <div className="h-8 w-8 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center shrink-0 mb-3">
+          <CircleDollarSign size={14} className="text-primary-500" />
         </div>
-        <div className="min-w-0 flex-1">
-          <p className={`text-[18px] font-bold leading-none tabular-nums ${totalOutstanding > 0 ? 'text-primary-700' : 'text-slate-300'}`}>{fmt(totalOutstanding)}</p>
-          <p className="text-[10px] text-slate-400 mt-0.5 font-medium">
-            {totalOutstanding === 0 ? 'All Settled' : 'Outstanding'}
-          </p>
-        </div>
+        <p className={`text-2xl font-bold tabular-nums leading-none ${totalOutstanding > 0 ? 'text-primary-700' : 'text-slate-200'}`}>{fmt(totalOutstanding)}</p>
+        <p className="text-[11px] font-medium text-slate-400 mt-1.5">
+          {totalOutstanding === 0 ? 'All Settled' : 'Outstanding'}
+        </p>
       </div>
 
-      {/* Card 4 — Collected */}
-      <div className={cardBase}>
-        <div className="h-9 w-9 rounded-xl border border-emerald-100 bg-emerald-50 flex items-center justify-center shrink-0">
-          <CheckCircle2 size={15} className="text-emerald-500" />
+      {/* Collected */}
+      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
+        <div className="flex items-start justify-between mb-3">
+          <div className="h-8 w-8 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
+            <CheckCircle2 size={14} className="text-emerald-500" />
+          </div>
+          <span className="text-sm font-bold text-emerald-600 tabular-nums">{rate}%</span>
         </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-[18px] font-bold leading-none tabular-nums text-emerald-600">{fmt(collected)}</p>
-          <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Collected · <span className="text-emerald-600 font-semibold">{rate}%</span></p>
+        <p className="text-2xl font-bold tabular-nums leading-none text-emerald-600">{fmt(collected)}</p>
+        <p className="text-[11px] font-medium text-slate-400 mt-1.5">Collected</p>
+        <div className="mt-2 h-1 rounded-full bg-slate-100 overflow-hidden">
+          <div className="h-full rounded-full bg-emerald-400 transition-all duration-700" style={{ width: `${rate}%` }} />
         </div>
       </div>
 
@@ -133,20 +132,6 @@ const SummaryCards = ({ rents }) => {
   )
 }
 
-// ── Bulk Bar ──────────────────────────────────────────────────────────────────
-const BulkBar = ({ count, onExport, onClear }) => (
-  <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 rounded-2xl bg-slate-900 px-5 py-3 shadow-2xl ring-1 ring-black/10 animate-scaleIn">
-    <span className="text-sm font-semibold text-white tabular-nums">{count} selected</span>
-    <div className="h-4 w-px bg-slate-700 mx-1" />
-    <button onClick={onExport}
-      className="flex items-center gap-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors">
-      <Download size={12} /> Export
-    </button>
-    <button onClick={onClear} className="rounded-lg p-1.5 text-slate-500 hover:text-white transition-colors">
-      <X size={14} />
-    </button>
-  </div>
-)
 
 // ── Tenant avatar helpers ─────────────────────────────────────────────────────
 const AVATAR_PALETTE = [
@@ -161,7 +146,7 @@ const tenantInitials    = (name = '') => name.trim().split(/\s+/).map(w => w[0])
 const tenantAvatarColor = (name = '') => AVATAR_PALETTE[(name.charCodeAt(0) || 0) % AVATAR_PALETTE.length]
 
 // ── Rent Row ──────────────────────────────────────────────────────────────────
-const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onLedger, onProfile, onAddCharge }) => {
+const RentRow = ({ rent: r, onMarkPaid, onLedger, onProfile, onAddCharge }) => {
   const isOverdue  = r.status === 'overdue'
   const isPending  = r.status === 'pending'
   const isPaid     = r.status === 'paid'
@@ -175,24 +160,11 @@ const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onLedger, onProfile,
 
   return (
     <tr
-      className={`group cursor-pointer transition-colors
-        ${selected
-          ? 'bg-primary-50/50'
-          : isOverdue
-          ? 'bg-red-50/20 hover:bg-red-50/40'
-          : 'hover:bg-slate-50/70'}
-      `}
+      className={`group cursor-pointer transition-colors ${
+        isOverdue ? 'bg-red-50/20 hover:bg-red-50/40' : 'hover:bg-slate-50/70'
+      }`}
       onClick={() => onLedger(r.tenant)}
     >
-      {/* Checkbox */}
-      <td className="pl-4 pr-3 py-4 w-10" onClick={e => { e.stopPropagation(); onSelect(r._id) }}>
-        <div className={`h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
-          selected ? 'bg-primary-500 border-primary-500 shadow-sm' : 'border-slate-300 group-hover:border-primary-400'
-        }`}>
-          {selected && <Check size={10} className="text-white" strokeWidth={3} />}
-        </div>
-      </td>
-
       {/* Tenant */}
       <td className="px-3 py-4">
         <div className="flex items-center gap-3">
@@ -357,6 +329,70 @@ const RentRow = ({ rent: r, selected, onSelect, onMarkPaid, onLedger, onProfile,
         </div>
       </td>
     </tr>
+  )
+}
+
+// ── Mobile rent card ─────────────────────────────────────────────────────────
+const RentCard = ({ rent: r, onMarkPaid, onLedger }) => {
+  const isOverdue = r.status === 'overdue'
+  const isPaid    = r.status === 'paid'
+  const bed       = r.tenant?.bed
+  const roomNum   = bed?.room?.roomNumber
+  const bedNum    = bed?.bedNumber
+  const avColor   = tenantAvatarColor(r.tenant?.name ?? '')
+  const avText    = tenantInitials(r.tenant?.name ?? '')
+  const rentRemaining = r.amount - (r.paidAmount ?? 0)
+  const charges   = r.chargesDue ?? 0
+  const total     = isPaid ? r.amount : rentRemaining + charges
+  const hasDues   = !isPaid && (r.status === 'pending' || r.status === 'partial' || isOverdue)
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onLedger(r.tenant)}
+      onKeyDown={e => e.key === 'Enter' && onLedger(r.tenant)}
+      className={`flex items-center gap-3 px-4 py-3.5 cursor-pointer touch-manipulation active:bg-slate-50 transition-colors ${
+        isOverdue ? 'border-l-[3px] border-l-red-400' : r.status === 'pending' || r.status === 'partial' ? 'border-l-[3px] border-l-amber-400' : 'border-l-[3px] border-l-transparent'
+      }`}
+    >
+      <div className={`h-9 w-9 rounded-xl flex items-center justify-center text-[11px] font-bold shrink-0 ${avColor}`}>
+        {avText}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-semibold truncate ${isOverdue ? 'text-red-600' : 'text-slate-800'}`}>
+          {r.tenant?.name ?? '—'}
+        </p>
+        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+          {roomNum && (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+              <BedDouble size={9} /> R{roomNum}{bedNum ? `/B${bedNum}` : ''}
+            </span>
+          )}
+          {isOverdue && daysOverdue(r.dueDate) > 0 && (
+            <span className="text-[10px] font-semibold text-red-500">{daysOverdue(r.dueDate)}d overdue</span>
+          )}
+          {isPaid && r.paymentDate && (
+            <span className="text-[10px] text-slate-400">{fdate(r.paymentDate)}</span>
+          )}
+        </div>
+      </div>
+      <div className="shrink-0 flex flex-col items-end gap-1.5">
+        <p className={`text-sm font-bold tabular-nums ${isOverdue ? 'text-red-600' : isPaid ? 'text-emerald-600' : 'text-slate-800'}`}>
+          {fmt(total)}
+        </p>
+        {hasDues ? (
+          <button
+            onClick={e => { e.stopPropagation(); onMarkPaid(r) }}
+            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-[10px] font-bold text-white ${isOverdue ? 'bg-red-500' : 'bg-primary-500'}`}
+          >
+            <CheckCircle2 size={10} /> Collect
+          </button>
+        ) : (
+          <StatusPill status={r.status} />
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -705,7 +741,7 @@ const TenantLedger = ({ tenant, propertyId, onCollect }) => {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex-1 min-h-0 overflow-y-auto scroll-smooth">
       {/* Header */}
       <div className="px-6 py-5 bg-slate-50 border-b border-slate-100">
         <div className="flex items-start justify-between gap-2">
@@ -831,8 +867,11 @@ const TenantLedger = ({ tenant, propertyId, onCollect }) => {
           </div>
         )}
 
-        {/* View toggle */}
-        <div className="mt-3 flex rounded-xl border border-slate-200 bg-white p-1 gap-1">
+      </div>
+
+      {/* Sticky view toggle */}
+      <div className="sticky top-0 z-10 bg-white border-b border-slate-100 px-6 py-2.5">
+        <div className="flex rounded-xl border border-slate-200 bg-white p-1 gap-1">
           {[
             { key: 'ledger',  label: 'Ledger Timeline' },
             { key: 'records', label: 'Rent Records'    },
@@ -848,7 +887,7 @@ const TenantLedger = ({ tenant, propertyId, onCollect }) => {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="px-6 py-5">
 
         {/* ── Ledger Timeline ── */}
         {view === 'ledger' && (
@@ -1167,7 +1206,6 @@ const Rent = () => {
   const [generating,     setGenerating]     = useState(false)
   const [autoGenResult,  setAutoGenResult]  = useState(null) // { month, year, created, skipped }
   const [paying,         setPaying]         = useState(false)
-  const [selected,       setSelected]       = useState(new Set())
   const [ledgerTenant,   setLedgerTenant]   = useState(null)
   const [profileTenant,  setProfileTenant]  = useState(null)   // TenantProfile drawer
   const [quickCharge,    setQuickCharge]     = useState(null)   // { tenant } quick add charge
@@ -1233,18 +1271,6 @@ const Rent = () => {
       (r.status === 'pending' || r.status === 'partial' || r.status === 'overdue')
     ).length,
   }), [allRents])
-
-  // Bulk selection
-  const toggleSelect = useCallback((id) => {
-    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
-  }, [])
-  const toggleAll = () => {
-    setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(r => r._id)))
-  }
-  const clearSelection = () => setSelected(new Set())
-
-  const allSelected  = filtered.length > 0 && selected.size === filtered.length
-  const someSelected = selected.size > 0
 
   // Auto-generate silently when property/month/year loads — only current month,
   // and only once per property+month+year combo per session.
@@ -1339,41 +1365,8 @@ const Rent = () => {
     }
   }
 
-  const handleExport = () => {
-    const targets = selected.size > 0 ? filtered.filter(r => selected.has(r._id)) : filtered
-    const headers = ['Tenant', 'Phone', 'Room/Bed', 'Rent Amount', 'Charges Due', 'Total Outstanding', 'Due Date', 'Status', 'Paid On', 'Method']
-    const rows = targets.map(r => {
-      const bed = r.tenant?.bed
-      const loc = bed?.room?.roomNumber ? `R${bed.room.roomNumber}${bed.bedNumber ? `/B${bed.bedNumber}` : ''}` : ''
-      const rentRemaining = r.status === 'paid' ? 0 : r.amount - (r.paidAmount ?? 0)
-      const chargesDue    = r.chargesDue ?? 0
-      return [
-        `"${r.tenant?.name ?? ''}"`,
-        r.tenant?.phone ?? '',
-        loc,
-        r.amount ?? 0,
-        chargesDue,
-        rentRemaining + chargesDue,
-        r.dueDate ? new Date(r.dueDate).toLocaleDateString('en-IN') : '',
-        r.status,
-        r.paymentDate ? new Date(r.paymentDate).toLocaleDateString('en-IN') : '',
-        r.paymentMethod ?? '',
-      ]
-    })
-    const csv = [headers, ...rows].map(row => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href     = url
-    a.download = `rent-${MONTH_SHORT[month - 1]}-${year}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    toast(`Exported ${targets.length} record${targets.length !== 1 ? 's' : ''}`, 'success')
-  }
-
   const onFilterTab = (key) => {
     setStatusFilter(key)
-    clearSelection()
   }
 
   const prevMonth = () => {
@@ -1408,7 +1401,7 @@ const Rent = () => {
   }
 
   const handlePrint = () => {
-    const targets = selected.size > 0 ? filtered.filter(r => selected.has(r._id)) : filtered
+    const targets = filtered
     const periodLabel = `${MONTHS.find(m => m.value === month)?.label} ${year}`
     const rows = targets.map(r => {
       const bed = r.tenant?.bed
@@ -1454,27 +1447,119 @@ const Rent = () => {
     <div className="space-y-5 max-w-7xl">
 
       {/* ── Header ── */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          {allRents.length > 0 && (
-            <p className="text-sm text-slate-400">
-              {counts.paid} paid · {counts.pending} pending · {counts.overdue} overdue
-            </p>
-          )}
+
+      {/* Mobile header */}
+      <div className="sm:hidden space-y-2">
+        <div className="flex items-center bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          {/* Prev */}
+          <button onClick={prevMonth} className="px-3 py-4 text-slate-400 active:bg-slate-50 transition-colors shrink-0">
+            <ChevronLeft size={16} />
+          </button>
+
+          {/* Month + Year — center */}
+          <div className="flex-1 flex items-center justify-center gap-1.5">
+            <select
+              value={month}
+              onChange={e => setMonth(Number(e.target.value))}
+              className="text-base font-bold text-slate-800 bg-transparent border-none outline-none cursor-pointer text-center appearance-none"
+            >
+              {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+            <input
+              type="number"
+              value={year}
+              onChange={e => setYear(Number(e.target.value))}
+              className="w-14 text-base font-bold text-slate-800 bg-transparent border-none outline-none text-center"
+            />
+          </div>
+
+          {/* Next */}
+          <button onClick={nextMonth} className="px-3 py-4 text-slate-400 active:bg-slate-50 transition-colors shrink-0">
+            <ChevronRight size={16} />
+          </button>
+
+          {/* Divider + Generate */}
+          {propertyId && (() => {
+            const isCurrentMonth = month === now.getMonth() + 1 && year === now.getFullYear()
+            const resultForPeriod = autoGenResult?.month === month && autoGenResult?.year === year
+            const allExist = resultForPeriod && autoGenResult.created === 0
+            const label = generating ? 'Loading…' : allExist && isCurrentMonth ? 'Current' : 'Generate'
+            return (
+              <>
+                <div className="w-px h-8 bg-slate-100 shrink-0" />
+                <button
+                  onClick={handleGenerate}
+                  disabled={generating}
+                  className={`flex items-center gap-1.5 px-4 py-4 text-sm font-semibold transition-colors shrink-0 ${
+                    allExist && isCurrentMonth
+                      ? 'text-slate-400'
+                      : 'text-primary-600'
+                  }`}
+                >
+                  <Zap size={14} />
+                  {label}
+                </button>
+              </>
+            )
+          })()}
         </div>
-        <div className="flex items-center gap-2">
-          {/* Month navigation */}
-          <button onClick={prevMonth} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50 transition-colors">
+
+        {/* Stats */}
+        {allRents.length > 0 && (
+          <div className="flex items-center gap-3 px-1">
+            <span className="text-xs text-slate-400">{counts.paid} paid</span>
+            <span className="h-1 w-1 rounded-full bg-slate-300" />
+            <span className={`text-xs font-medium ${counts.pending > 0 ? 'text-amber-500' : 'text-slate-400'}`}>{counts.pending} pending</span>
+            <span className="h-1 w-1 rounded-full bg-slate-300" />
+            <span className={`text-xs font-medium ${counts.overdue > 0 ? 'text-red-500' : 'text-slate-400'}`}>{counts.overdue} overdue</span>
+          </div>
+        )}
+      </div>
+
+      {/* Desktop header */}
+      <div className="hidden sm:flex items-center justify-between gap-3">
+        {/* Period navigator pill */}
+        <div className="flex items-center bg-white rounded-2xl border border-slate-200 shadow-sm p-1">
+          <button onClick={prevMonth} className="h-8 w-8 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors shrink-0">
             <ChevronLeft size={14} />
           </button>
-          <select className="input w-32 text-sm" value={month} onChange={e => setMonth(Number(e.target.value))}>
-            {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-          </select>
-          <input type="number" className="input w-20 text-sm" value={year}
-            onChange={e => setYear(Number(e.target.value))} />
-          <button onClick={nextMonth} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50 transition-colors">
+          <div className="flex items-center gap-1 px-3">
+            <select
+              className="text-sm font-semibold text-slate-700 bg-transparent border-none outline-none cursor-pointer appearance-none"
+              value={month}
+              onChange={e => setMonth(Number(e.target.value))}
+            >
+              {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+            <input
+              type="number"
+              className="w-14 text-sm font-semibold text-slate-700 bg-transparent border-none outline-none text-center"
+              value={year}
+              onChange={e => setYear(Number(e.target.value))}
+            />
+          </div>
+          <button onClick={nextMonth} className="h-8 w-8 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors shrink-0">
             <ChevronRight size={14} />
           </button>
+        </div>
+
+        {/* Stats + Generate */}
+        <div className="flex items-center gap-3 shrink-0">
+          {allRents.length > 0 && (
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5 text-slate-500">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />{counts.paid} paid
+              </span>
+              <span className="flex items-center gap-1.5 text-slate-500">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />{counts.pending} pending
+              </span>
+              {counts.overdue > 0 && (
+                <span className="flex items-center gap-1.5 font-semibold text-red-500">
+                  <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />{counts.overdue} overdue
+                </span>
+              )}
+            </div>
+          )}
           {propertyId && (() => {
             const isCurrentMonth = month === now.getMonth() + 1 && year === now.getFullYear()
             const resultForPeriod = autoGenResult?.month === month && autoGenResult?.year === year
@@ -1484,7 +1569,6 @@ const Rent = () => {
                 className={`btn-primary ${allExist && isCurrentMonth ? 'opacity-70' : ''}`}
                 onClick={handleGenerate}
                 disabled={generating}
-                title={isCurrentMonth ? 'Auto-generates on page load. Click to force re-run.' : 'Manually generate rent records for this period.'}
               >
                 <Zap size={15} />
                 {generating ? 'Generating…' : allExist && isCurrentMonth ? 'Up to date' : 'Generate'}
@@ -1507,14 +1591,19 @@ const Rent = () => {
 
           {/* ── Overdue Alert ── */}
           {counts.overdue > 0 && (
-            <div className="flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
-              <AlertTriangle size={15} className="shrink-0 text-red-500" />
+            <div className="flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5">
+              <div className="h-8 w-8 rounded-xl bg-red-100 border border-red-200 flex items-center justify-center shrink-0">
+                <AlertTriangle size={14} className="text-red-500" />
+              </div>
               <p className="flex-1 text-sm text-red-700 font-medium">
-                {counts.overdue} tenant{counts.overdue !== 1 ? 's have' : ' has'} overdue rent this period.
+                <span className="font-bold">{counts.overdue} tenant{counts.overdue !== 1 ? 's' : ''}</span>
+                {counts.overdue !== 1 ? ' have' : ' has'} overdue rent this period.
               </p>
-              <button className="text-xs font-semibold text-red-600 hover:text-red-800 transition-colors"
-                onClick={() => onFilterTab('overdue')}>
-                View →
+              <button
+                className="shrink-0 rounded-xl bg-red-100 border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-200 transition-colors"
+                onClick={() => onFilterTab('overdue')}
+              >
+                View overdue
               </button>
             </div>
           )}
@@ -1523,8 +1612,8 @@ const Rent = () => {
           <div className="sticky top-0 z-10">
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
 
-              {/* Row 1 — Status tabs */}
-              <div className="flex items-end gap-0 px-2 pt-1 border-b border-slate-100 overflow-x-auto scrollbar-none">
+              {/* Row 1 — Status pills */}
+              <div className="flex items-center gap-1 px-2.5 py-2 border-b border-slate-100 overflow-x-auto scrollbar-none">
                 {FILTERS.map(({ key, label }) => {
                   const isActive = statusFilter === key
                   const dot = {
@@ -1534,26 +1623,18 @@ const Rent = () => {
                     paid:         'bg-emerald-400',
                     vacated_dues: 'bg-slate-400',
                   }[key]
-                  const chip = {
-                    all:          'bg-slate-100 text-slate-500',
-                    pending:      'bg-amber-50 text-amber-600',
-                    partial:      'bg-orange-50 text-orange-600',
-                    overdue:      'bg-red-50 text-red-600',
-                    paid:         'bg-emerald-50 text-emerald-600',
-                    vacated_dues: 'bg-red-50 text-red-600',
-                  }[key]
                   return (
                     <button key={key} onClick={() => onFilterTab(key)}
-                      className={`relative flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold whitespace-nowrap transition-all border-b-2 -mb-px ${
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
                         isActive
-                          ? 'border-primary-500 text-primary-600'
-                          : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50/80'
+                          ? 'bg-primary-50 text-primary-600 ring-1 ring-primary-200'
+                          : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
                       }`}>
                       {dot && <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${dot}`} />}
                       {label}
                       {counts[key] > 0 && (
                         <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${
-                          isActive ? 'bg-primary-50 text-primary-600' : chip
+                          isActive ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-500'
                         }`}>{counts[key]}</span>
                       )}
                     </button>
@@ -1564,11 +1645,11 @@ const Rent = () => {
               {/* Row 2 — Search · Sort · Actions */}
               <div className="flex items-center gap-2 px-3 py-2">
                 {/* Search */}
-                <div className="relative flex-1 min-w-[180px]">
+                <div className="relative flex-1">
                   <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   <input
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-8 py-1.5 text-sm text-slate-700 placeholder:text-slate-400 outline-none focus:border-primary-400 focus:bg-white focus:ring-2 focus:ring-primary-100 transition-all"
-                    placeholder="Search by name or phone…"
+                    placeholder="Search…"
                     value={search}
                     onChange={e => setSearch(e.target.value)}
                   />
@@ -1586,26 +1667,18 @@ const Rent = () => {
                   <select
                     value={sortBy}
                     onChange={e => setSortBy(e.target.value)}
-                    className="rounded-xl border border-slate-200 bg-white pl-7 pr-3 py-1.5 text-xs font-medium text-slate-600 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all appearance-none cursor-pointer w-44"
+                    className="rounded-xl border border-slate-200 bg-white pl-7 pr-2 py-1.5 text-xs font-medium text-slate-600 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all appearance-none cursor-pointer w-32 sm:w-44"
                   >
-                    <option value="due_desc">Highest due first</option>
-                    <option value="name_asc">Name A → Z</option>
-                    <option value="due_date_asc">Due date oldest</option>
+                    <option value="due_desc">Highest due</option>
+                    <option value="name_asc">Name A–Z</option>
+                    <option value="due_date_asc">Due date</option>
                     <option value="paid_recent">Recently paid</option>
                   </select>
                 </div>
 
-                {/* Divider */}
-                <div className="h-5 w-px bg-slate-200 shrink-0" />
-
-                {/* Export */}
-                <button onClick={handleExport}
-                  className="shrink-0 flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-all">
-                  <Download size={12} /> Export
-                </button>
-                {/* Print */}
+                {/* Print — desktop only */}
                 <button onClick={handlePrint}
-                  className="shrink-0 flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-all">
+                  className="hidden sm:flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-all">
                   <Printer size={12} /> Print
                 </button>
               </div>
@@ -1629,28 +1702,34 @@ const Rent = () => {
             </div>
           ) : (
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
+
+              {/* Mobile: card list */}
+              <div className="sm:hidden divide-y divide-slate-100">
+                {filtered.map(r => (
+                  <RentCard
+                    key={r._id}
+                    rent={r}
+                    onMarkPaid={handleOpenPayModal}
+                    onLedger={setLedgerTenant}
+                  />
+                ))}
+              </div>
+
+              {/* Desktop: table */}
+              <div className="hidden sm:block overflow-x-auto">
                 <table className="min-w-full">
                   <thead>
-                    <tr className="border-b border-slate-100 bg-slate-50/60">
-                      <th className="pl-4 pr-3 py-3.5 w-10 cursor-pointer" onClick={toggleAll}>
-                        <div className={`h-4 w-4 rounded border-2 flex items-center justify-center transition-all ${
-                          allSelected ? 'bg-primary-500 border-primary-500 shadow-sm' : 'border-slate-300 hover:border-primary-400'
-                        }`}>
-                          {allSelected && <Check size={10} className="text-white" strokeWidth={3} />}
-                          {!allSelected && someSelected && <span className="h-1.5 w-1.5 rounded-sm bg-primary-400" />}
-                        </div>
-                      </th>
+                    <tr className="border-b border-slate-100 bg-slate-50/80">
                       {[
-                        { label: 'Tenant',      align: 'text-left'  },
-                        { label: 'Room / Bed',  align: 'text-left'  },
-                        { label: 'Amount',      align: 'text-left'  },
-                        { label: 'Due / Cycle', align: 'text-left'  },
-                        { label: 'Status',      align: 'text-left'  },
-                        { label: 'Paid On',     align: 'text-left'  },
-                        { label: '',            align: 'text-right' },
-                      ].map(({ label, align }) => (
-                        <th key={label} className={`px-3 py-3.5 ${align} text-[10px] font-bold text-slate-400 uppercase tracking-[0.08em]`}>
+                        { label: 'Tenant'      },
+                        { label: 'Room / Bed'  },
+                        { label: 'Amount'      },
+                        { label: 'Due / Cycle' },
+                        { label: 'Status'      },
+                        { label: 'Paid On'     },
+                        { label: ''            },
+                      ].map(({ label }) => (
+                        <th key={label} className="px-3 py-3 text-left text-[10px] font-bold text-slate-400 uppercase tracking-[0.06em]">
                           {label}
                         </th>
                       ))}
@@ -1661,8 +1740,6 @@ const Rent = () => {
                       <RentRow
                         key={r._id}
                         rent={r}
-                        selected={selected.has(r._id)}
-                        onSelect={toggleSelect}
                         onMarkPaid={handleOpenPayModal}
                         onLedger={setLedgerTenant}
                         onProfile={setProfileTenant}
@@ -1671,7 +1748,7 @@ const Rent = () => {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </div>{/* end hidden sm:block */}
 
               {/* Footer */}
               <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/40 flex items-center justify-between gap-3 flex-wrap">
@@ -1680,7 +1757,6 @@ const Rent = () => {
                   {(search || statusFilter !== 'all') && (
                     <span className="text-slate-400"> · filtered from <span className="font-medium text-slate-500">{allRents.length}</span></span>
                   )}
-                  {someSelected && <span className="text-primary-600 font-semibold"> · {selected.size} selected</span>}
                 </p>
                 <p className="text-xs text-slate-500 flex items-center gap-1.5">
                   Outstanding:
@@ -1692,15 +1768,6 @@ const Rent = () => {
             </div>
           )}
         </>
-      )}
-
-      {/* ── Bulk Bar ── */}
-      {someSelected && (
-        <BulkBar
-          count={selected.size}
-          onExport={handleExport}
-          onClear={clearSelection}
-        />
       )}
 
       {/* ── Modals ── */}
@@ -1723,6 +1790,7 @@ const Rent = () => {
           onClose={() => setLedgerTenant(null)}
           closeOnBackdrop={false}
           width="max-w-2xl"
+          bodyClassName="flex-1 overflow-hidden flex flex-col"
         >
           <TenantLedger
             tenant={ledgerTenant}

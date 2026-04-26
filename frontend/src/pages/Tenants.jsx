@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Plus, Phone, Mail, BedDouble, Calendar, Calculator,
@@ -9,7 +10,7 @@ import {
   BookOpen, ChevronDown, ChevronUp, Filter, CreditCard, Zap,
   TrendingUp, TrendingDown, Minus, RefreshCw, ChevronLeft, ChevronRight,
   Home, Building2, Shield, Copy, PhoneCall, MoreVertical,
-  Pencil, UserMinus, Trash2, Power, AlertTriangle, Users,
+  Pencil, UserMinus, Trash2, Power, AlertTriangle, Users, SlidersHorizontal,
 } from 'lucide-react'
 import { getTenants, getTenant, searchTenants as searchTenantsApi, createTenant, updateTenant, vacateTenant, markDepositPaid, getTenantRents, getTenantAdvance, applyTenantAdvance, refundTenantAdvance, adjustDeposit, refundDeposit, getTenantProfile, vacateWithPayment } from '../api/tenants'
 import { loadEnabledMethods } from '../utils/paymentMethods'
@@ -178,7 +179,7 @@ const STAT_ICON_STYLES = {
 const StatCard = ({ label, value, sub, icon: Icon, color = 'default' }) => {
   const { num, ic } = STAT_ICON_STYLES[color] ?? STAT_ICON_STYLES.default
   return (
-    <div className="flex-1 min-w-[120px] rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300">
+    <div className="rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 sm:flex-1 sm:min-w-[120px]">
       {Icon && (
         <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${ic}`}>
           <Icon size={15} />
@@ -194,127 +195,295 @@ const StatCard = ({ label, value, sub, icon: Icon, color = 'default' }) => {
 }
 
 // ── Filter Bar ────────────────────────────────────────────────────────────────
-const FilterBar = ({ filters, onChange, onReset, hasActive }) => (
-  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-    {/* Row 1 — Search */}
-    <div className="px-3 pt-3 pb-2.5 border-b border-slate-100">
-      <div className="relative">
-        <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-        <input
-          className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-9 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#60C3AD]/25 focus:border-[#60C3AD] focus:bg-white transition-all"
-          placeholder="Search by name, phone or email…"
-          value={filters.search}
-          onChange={e => onChange('search', e.target.value)}
-        />
-        {filters.search && (
-          <button onClick={() => onChange('search', '')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
-            <X size={13} />
+const FilterBar = ({ filters, onChange, onReset, hasActive }) => {
+  const [sheetOpen, setSheetOpen] = useState(false)
+
+  const activeCount = [
+    filters.status !== 'all',
+    filters.rentStatus !== 'all',
+    filters.profile !== 'all',
+    filters.deposit !== 'all',
+    filters.extraBed !== 'all',
+    filters.sortBy !== 'pending_first',
+  ].filter(Boolean).length
+
+  return (
+    <>
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+        {/* Row 1 — Search (always visible) */}
+        <div className="px-3 pt-3 pb-2.5 border-b border-slate-100">
+          <div className="relative">
+            <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-9 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#60C3AD]/25 focus:border-[#60C3AD] focus:bg-white transition-all"
+              placeholder="Search by name, phone or email…"
+              value={filters.search}
+              onChange={e => onChange('search', e.target.value)}
+            />
+            {filters.search && (
+              <button onClick={() => onChange('search', '')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Mobile-only: Filters button + Sort */}
+        <div className="sm:hidden px-3 py-2 flex items-center gap-2">
+          <button
+            onClick={() => setSheetOpen(true)}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+              activeCount > 0
+                ? 'bg-[#60C3AD] border-[#60C3AD] text-white'
+                : 'bg-white border-slate-200 text-slate-600'
+            }`}
+          >
+            <SlidersHorizontal size={12} />
+            Filters
+            {activeCount > 0 && (
+              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/30 text-[10px] font-bold">{activeCount}</span>
+            )}
           </button>
-        )}
+          <select
+            value={filters.sortBy}
+            onChange={e => onChange('sortBy', e.target.value)}
+            className="ml-auto rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#60C3AD]/20 focus:border-[#60C3AD] transition-colors cursor-pointer"
+          >
+            <option value="pending_first">Pending First</option>
+            <option value="name">Name A–Z</option>
+            <option value="rent_desc">Rent High–Low</option>
+            <option value="rent_asc">Rent Low–High</option>
+            <option value="checkin">Move-in Newest</option>
+          </select>
+          {hasActive && (
+            <button onClick={onReset}
+              className="flex items-center justify-center h-7 w-7 rounded-full border border-slate-200 text-slate-500 hover:bg-red-50 hover:border-red-300 hover:text-red-500 transition-all shrink-0">
+              <RotateCcw size={11} />
+            </button>
+          )}
+        </div>
+
+        {/* Desktop: Row 2 — Status + Rent filters */}
+        <div className="hidden sm:flex px-3 pt-2 pb-2 flex-wrap items-center gap-2 border-b border-slate-100">
+          <div className="flex items-center gap-0.5 bg-slate-100 rounded-full p-0.5">
+            {[
+              { v: 'all',     l: 'All'     },
+              { v: 'active',  l: 'Active'  },
+              { v: 'notice',  l: 'Notice'  },
+              { v: 'vacated', l: 'Vacated' },
+            ].map(({ v, l }) => (
+              <button key={v} onClick={() => onChange('status', v)}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${
+                  filters.status === v
+                    ? v === 'notice' ? 'bg-orange-400 text-white shadow-sm' : 'bg-[#60C3AD] text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}>{l}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-0.5 bg-slate-100 rounded-full p-0.5">
+            {[
+              { v: 'all',             l: 'All Rent' },
+              { v: 'pending_overdue', l: 'Pending'  },
+              { v: 'current',         l: 'Paid'     },
+            ].map(({ v, l }) => (
+              <button key={v} onClick={() => onChange('rentStatus', v)}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${
+                  filters.rentStatus === v
+                    ? v === 'pending_overdue' ? 'bg-red-500 text-white shadow-sm' : 'bg-[#60C3AD] text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}>{l}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Desktop: Row 3 — Toggle chips + Sort */}
+        <div className="hidden sm:flex px-3 py-2 flex-wrap items-center gap-2">
+          <button
+            onClick={() => onChange('profile', filters.profile === 'incomplete' ? 'all' : 'incomplete')}
+            className={`rounded-full px-3 py-1 text-xs font-semibold border transition-all ${
+              filters.profile === 'incomplete'
+                ? 'bg-amber-500 border-amber-500 text-white shadow-sm'
+                : 'bg-white border-slate-200 text-slate-500 hover:border-amber-300 hover:text-amber-600'
+            }`}>Incomplete</button>
+          <button
+            onClick={() => onChange('deposit', filters.deposit === 'pending' ? 'all' : 'pending')}
+            className={`rounded-full px-3 py-1 text-xs font-semibold border transition-all ${
+              filters.deposit === 'pending'
+                ? 'bg-rose-500 border-rose-500 text-white shadow-sm'
+                : 'bg-white border-slate-200 text-slate-500 hover:border-rose-300 hover:text-rose-600'
+            }`}>Deposit Due</button>
+          <button
+            onClick={() => onChange('extraBed', filters.extraBed === 'extra' ? 'all' : 'extra')}
+            className={`rounded-full px-3 py-1 text-xs font-semibold border transition-all ${
+              filters.extraBed === 'extra'
+                ? 'bg-violet-500 border-violet-500 text-white shadow-sm'
+                : 'bg-white border-slate-200 text-slate-500 hover:border-violet-300 hover:text-violet-600'
+            }`}>✦ Extra Beds</button>
+          <div className="ml-auto flex items-center gap-2">
+            <select
+              value={filters.sortBy}
+              onChange={e => onChange('sortBy', e.target.value)}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#60C3AD]/20 focus:border-[#60C3AD] transition-colors cursor-pointer hover:border-slate-300"
+            >
+              <option value="pending_first">Pending First</option>
+              <option value="name">Name A–Z</option>
+              <option value="rent_desc">Rent High–Low</option>
+              <option value="rent_asc">Rent Low–High</option>
+              <option value="checkin">Move-in Newest</option>
+            </select>
+            {hasActive && (
+              <button onClick={onReset}
+                className="flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-500 hover:bg-red-50 hover:border-red-300 hover:text-red-500 transition-all">
+                <RotateCcw size={11} /> Reset
+              </button>
+            )}
+          </div>
+        </div>
       </div>
-    </div>
 
-    {/* Row 2 — Filters + Sort */}
-    <div className="px-3 py-2 flex flex-wrap items-center gap-2">
-
-      {/* Status segmented control */}
-      <div className="flex items-center gap-0.5 bg-slate-100 rounded-full p-0.5">
-        {[
-          { v: 'all',     l: 'All'     },
-          { v: 'active',  l: 'Active'  },
-          { v: 'notice',  l: 'Notice'  },
-          { v: 'vacated', l: 'Vacated' },
-        ].map(({ v, l }) => (
-          <button key={v} onClick={() => onChange('status', v)}
-            className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-              filters.status === v
-                ? v === 'notice'
-                  ? 'bg-orange-400 text-white shadow-sm'
-                  : 'bg-[#60C3AD] text-white shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}>{l}</button>
-        ))}
-      </div>
-
-      <div className="h-5 w-px bg-slate-200 shrink-0" />
-
-      {/* Rent segmented control */}
-      <div className="flex items-center gap-0.5 bg-slate-100 rounded-full p-0.5">
-        {[
-          { v: 'all',             l: 'All Rent' },
-          { v: 'pending_overdue', l: 'Pending'  },
-          { v: 'current',         l: 'Paid'     },
-        ].map(({ v, l }) => (
-          <button key={v} onClick={() => onChange('rentStatus', v)}
-            className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-              filters.rentStatus === v
-                ? v === 'pending_overdue'
-                  ? 'bg-red-500 text-white shadow-sm'
-                  : 'bg-[#60C3AD] text-white shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}>{l}</button>
-        ))}
-      </div>
-
-      <div className="h-5 w-px bg-slate-200 shrink-0" />
-
-      {/* Toggle chips */}
-      <button
-        onClick={() => onChange('profile', filters.profile === 'incomplete' ? 'all' : 'incomplete')}
-        className={`rounded-full px-3 py-1 text-xs font-semibold border transition-all ${
-          filters.profile === 'incomplete'
-            ? 'bg-amber-500 border-amber-500 text-white shadow-sm'
-            : 'bg-white border-slate-200 text-slate-500 hover:border-amber-300 hover:text-amber-600'
-        }`}
-      >
-        Incomplete
-      </button>
-      <button
-        onClick={() => onChange('deposit', filters.deposit === 'pending' ? 'all' : 'pending')}
-        className={`rounded-full px-3 py-1 text-xs font-semibold border transition-all ${
-          filters.deposit === 'pending'
-            ? 'bg-rose-500 border-rose-500 text-white shadow-sm'
-            : 'bg-white border-slate-200 text-slate-500 hover:border-rose-300 hover:text-rose-600'
-        }`}
-      >
-        Deposit Due
-      </button>
-      <button
-        onClick={() => onChange('extraBed', filters.extraBed === 'extra' ? 'all' : 'extra')}
-        className={`rounded-full px-3 py-1 text-xs font-semibold border transition-all ${
-          filters.extraBed === 'extra'
-            ? 'bg-violet-500 border-violet-500 text-white shadow-sm'
-            : 'bg-white border-slate-200 text-slate-500 hover:border-violet-300 hover:text-violet-600'
-        }`}
-      >
-        ✦ Extra Beds
-      </button>
-
-      {/* Sort + Reset pushed to right */}
-      <div className="ml-auto flex items-center gap-2">
-        <select
-          value={filters.sortBy}
-          onChange={e => onChange('sortBy', e.target.value)}
-          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#60C3AD]/20 focus:border-[#60C3AD] transition-colors cursor-pointer hover:border-slate-300"
+      {/* Mobile filter bottom sheet — portal so it escapes overflow/z-index */}
+      {sheetOpen && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-end"
+          style={{ background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(3px)' }}
+          onClick={() => setSheetOpen(false)}
         >
-          <option value="pending_first">Pending First</option>
-          <option value="name">Name A–Z</option>
-          <option value="rent_desc">Rent High–Low</option>
-          <option value="rent_asc">Rent Low–High</option>
-          <option value="checkin">Move-in Newest</option>
-        </select>
-        {hasActive && (
-          <button onClick={onReset}
-            className="flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-500 hover:bg-red-50 hover:border-red-300 hover:text-red-500 transition-all">
-            <RotateCcw size={11} /> Reset
-          </button>
-        )}
-      </div>
+          <div
+            className="w-full bg-white rounded-t-2xl overflow-y-auto max-h-[88vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Sticky header */}
+            <div className="sticky top-0 bg-white flex items-center justify-between px-4 pt-4 pb-3 border-b border-slate-100 z-10">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal size={15} className="text-primary-500" />
+                <span className="text-sm font-semibold text-slate-800">Filters</span>
+                {activeCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 text-[10px] font-bold">{activeCount} active</span>
+                )}
+              </div>
+              <button onClick={() => setSheetOpen(false)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 transition-colors">
+                <X size={16} />
+              </button>
+            </div>
 
-    </div>
-  </div>
-)
+            <div className="p-4 space-y-5">
+
+              {/* Tenant Status */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Tenant Status</p>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { v: 'all',     l: 'All'     },
+                    { v: 'active',  l: 'Active'  },
+                    { v: 'notice',  l: 'Notice'  },
+                    { v: 'vacated', l: 'Vacated' },
+                  ].map(({ v, l }) => (
+                    <button key={v} onClick={() => onChange('status', v)}
+                      className={`rounded-xl py-2 text-xs font-semibold text-center border transition-colors ${
+                        filters.status === v
+                          ? v === 'notice'
+                            ? 'bg-orange-50 border-orange-300 text-orange-700'
+                            : 'bg-primary-50 border-primary-300 text-primary-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}>{l}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Rent */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Rent</p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { v: 'all',             l: 'All'     },
+                    { v: 'pending_overdue', l: 'Pending' },
+                    { v: 'current',         l: 'Paid'    },
+                  ].map(({ v, l }) => (
+                    <button key={v} onClick={() => onChange('rentStatus', v)}
+                      className={`rounded-xl py-2 text-xs font-semibold text-center border transition-colors ${
+                        filters.rentStatus === v
+                          ? v === 'pending_overdue'
+                            ? 'bg-red-50 border-red-300 text-red-700'
+                            : 'bg-primary-50 border-primary-300 text-primary-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}>{l}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Show Only */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Show Only</p>
+                <div className="flex flex-col gap-1.5">
+                  {[
+                    { key: 'profile', active: filters.profile === 'incomplete', label: 'Incomplete profiles',   cls: 'bg-amber-50 border-amber-300 text-amber-700'   },
+                    { key: 'deposit', active: filters.deposit === 'pending',    label: 'Deposit due',          cls: 'bg-rose-50 border-rose-300 text-rose-700'       },
+                    { key: 'extraBed',active: filters.extraBed === 'extra',     label: '✦ Extra bed tenants',  cls: 'bg-violet-50 border-violet-300 text-violet-700' },
+                  ].map(({ key, active, label, cls }) => (
+                    <button key={key}
+                      onClick={() => {
+                        if (key === 'profile') onChange('profile', active ? 'all' : 'incomplete')
+                        else if (key === 'deposit') onChange('deposit', active ? 'all' : 'pending')
+                        else onChange('extraBed', active ? 'all' : 'extra')
+                      }}
+                      className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold border transition-colors ${
+                        active ? cls : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <span className={`h-2 w-2 rounded-full shrink-0 ${active ? 'bg-current' : 'bg-slate-300'}`} />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sort By */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Sort By</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    { v: 'pending_first', l: 'Pending First'  },
+                    { v: 'name',          l: 'Name A–Z'       },
+                    { v: 'rent_desc',     l: 'Rent High–Low'  },
+                    { v: 'rent_asc',      l: 'Rent Low–High'  },
+                    { v: 'checkin',       l: 'Move-in Newest' },
+                  ].map(({ v, l }) => (
+                    <button key={v} onClick={() => onChange('sortBy', v)}
+                      className={`rounded-xl px-3 py-2.5 text-xs font-semibold text-center border transition-colors ${
+                        filters.sortBy === v
+                          ? 'bg-primary-50 border-primary-300 text-primary-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}>{l}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-2 pt-1 pb-2">
+                {hasActive && (
+                  <button
+                    onClick={() => { onReset(); setSheetOpen(false) }}
+                    className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-50 transition-colors"
+                  >
+                    Reset All
+                  </button>
+                )}
+                <button
+                  onClick={() => setSheetOpen(false)}
+                  className="flex-1 rounded-xl bg-primary-500 hover:bg-primary-600 py-2.5 text-sm font-semibold text-white transition-colors"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
 
 // ── Action Required Bar ───────────────────────────────────────────────────────
 const ActionBar = ({ incomplete, pendingRentCount, onIncompleteClick, onPendingRentClick }) => {
@@ -668,10 +837,10 @@ const AddTenantForm = ({ propertyId, onSubmit, onCancel, saving }) => {
                 <label className="label text-[12px] flex items-center gap-1.5">
                   <Phone size={11} className="text-slate-400" /> Emergency Contact
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
                   <input className="input text-sm" placeholder="Contact name"
                     value={form.emergencyName} onChange={e => set('emergencyName', e.target.value)} />
-                  <PhoneInput value={form.emergencyPhone} onChange={v => set('emergencyPhone', v)} placeholder="Phone" />
+                  <PhoneInput value={form.emergencyPhone} onChange={v => set('emergencyPhone', v)} placeholder="Phone number" />
                 </div>
               </div>
 
@@ -903,6 +1072,98 @@ const TenantRow = ({ tenant: t, onView, onQuickPay }) => {
 }
 
 
+
+// ── Tenant Card (mobile list) ─────────────────────────────────────────────────
+const TenantCard = ({ tenant: t, onView, onQuickPay }) => {
+  const lb         = t.ledgerBalance ?? null
+  const pending    = lb !== null && lb > 0 ? lb : 0
+  const advance    = lb !== null && lb < 0 ? Math.abs(lb) : 0
+  const hasPending = pending > 0
+  const hasAdvance = advance > 0
+  const depositDue = (t.depositAmount ?? 0) > 0 && !t.depositPaid && t.status !== 'vacated'
+
+  const rentStatus = (() => {
+    if (lb === null) return null
+    if (t.status === 'vacated') return hasPending ? 'pending' : 'current'
+    return computeRentStatus(t)
+  })()
+
+  const statusDot = {
+    active:     'bg-emerald-400',
+    notice:     'bg-orange-400',
+    vacated:    'bg-slate-300',
+    reserved:   'bg-blue-400',
+    incomplete: 'bg-amber-400',
+  }[t.status] ?? 'bg-slate-300'
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onView(t)}
+      onKeyDown={e => e.key === 'Enter' && onView(t)}
+      className={`flex items-center gap-3 px-4 py-3.5 cursor-pointer touch-manipulation active:bg-slate-50 transition-colors ${
+        hasPending ? 'border-l-[3px] border-l-red-400' : 'border-l-[3px] border-l-transparent'
+      }`}
+    >
+      <Avatar name={t.name} size="sm" className="shrink-0" />
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm font-bold text-slate-800 truncate leading-tight">{t.name}</p>
+          <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${statusDot}`} />
+        </div>
+        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+          {t.bed && t.status !== 'vacated' ? (
+            <span className="text-[11px] text-slate-500 font-medium">
+              {t.bed.room?.roomNumber ? `R${t.bed.room.roomNumber} · ` : ''}Bed {t.bed.bedNumber}
+            </span>
+          ) : t.status === 'incomplete' ? (
+            <span className="text-[11px] text-orange-500 font-medium">No bed assigned</span>
+          ) : null}
+          {t.status !== 'incomplete' && t.rentAmount > 0 && (
+            <span className="text-[11px] text-slate-400">{fmt(t.rentAmount)}/mo</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+          {rentStatus && (
+            <span className={`inline-flex items-center gap-1 text-[9px] font-bold rounded-full px-2 py-0.5 ${
+              rentStatus === 'current' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+            }`}>
+              <span className={`h-1 w-1 rounded-full shrink-0 ${rentStatus === 'current' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+              {rentStatus === 'current' ? 'Rent Paid' : 'Balance Due'}
+            </span>
+          )}
+          {hasPending && (
+            <span className="text-[10px] font-bold text-red-600">{fmt(pending)} due</span>
+          )}
+          {hasAdvance && (
+            <span className="text-[10px] font-bold text-emerald-600">{fmt(advance)} adv</span>
+          )}
+          {depositDue && (
+            <span className="inline-flex items-center gap-1 text-[9px] font-bold rounded-full px-2 py-0.5 bg-amber-100 text-amber-700">
+              <span className="h-1 w-1 rounded-full bg-amber-500 shrink-0" />
+              Deposit Due
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="shrink-0 flex flex-col items-end gap-2">
+        {hasPending && t.status !== 'incomplete' ? (
+          <button
+            onClick={e => { e.stopPropagation(); onQuickPay(t) }}
+            className="flex items-center gap-1 rounded-xl bg-[#60C3AD] hover:bg-[#4fa898] px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors shadow-sm">
+            <CreditCard size={11} /> Collect
+          </button>
+        ) : (
+          <ChevronRight size={16} className="text-slate-300" />
+        )}
+        <Badge status={t.status} />
+      </div>
+    </div>
+  )
+}
 
 // ── Tenant Profile Drawer ─────────────────────────────────────────────────────
 const InfoRow = ({ icon: Icon, label, value }) => (
@@ -1210,17 +1471,35 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
   // ── Reserved tenant actions ──
   const [confirmMoveInOpen,    setConfirmMoveInOpen]    = useState(false)
   const [confirmMoveInRooms,   setConfirmMoveInRooms]   = useState([])
+  const [confirmMoveInBed,     setConfirmMoveInBed]     = useState(null)
   const [cancelResActing,      setCancelResActing]      = useState(false)
   const [cancelResConfirmOpen, setCancelResConfirmOpen] = useState(false)
 
-  const openConfirmMoveIn = async () => {
-    setConfirmMoveInOpen(true)
-    if (confirmMoveInRooms.length === 0) {
+  // Pre-fetch the reserved bed data as soon as heldAdvance is available
+  useEffect(() => {
+    if (!heldAdvance?.bedId) return
+    let cancelled = false
+    const fetchBed = async () => {
       try {
-        const res = await getRooms(propertyId)
-        setConfirmMoveInRooms(res.data?.data ?? [])
+        const roomsRes = await getRooms(propertyId)
+        const rooms    = roomsRes.data?.data ?? []
+        if (!cancelled) setConfirmMoveInRooms(rooms)
+        const roomId = heldAdvance.roomId
+          ?? rooms.find(r => String(r.roomNumber) === String(heldAdvance.roomNumber))?._id
+        if (!roomId) return
+        const bedsRes = await getBeds(propertyId, roomId)
+        const beds    = bedsRes.data?.data ?? []
+        const bed     = beds.find(b => String(b._id) === String(heldAdvance.bedId))
+        if (bed && !cancelled) setConfirmMoveInBed(bed)
       } catch (_) {}
     }
+    fetchBed()
+    return () => { cancelled = true }
+  }, [heldAdvance?.bedId]) // eslint-disable-line
+
+  const openConfirmMoveIn = () => {
+    if (!confirmMoveInBed) return
+    setConfirmMoveInOpen(true)
   }
 
   const handleCancelReservation = async () => {
@@ -1658,23 +1937,27 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
     const hasGaps = missing.length > 0
     const isEditing = editing === section
     return (
-      <div className={`flex items-center justify-between px-4 py-3 border-b ${isEditing ? 'border-[#60C3AD]/20 bg-[#60C3AD]/5' : 'border-[#E2E8F0]'}`}>
-        <div className="flex items-center gap-2">
-          <div className={`flex h-6 w-6 items-center justify-center rounded-lg ${isEditing ? 'bg-[#60C3AD]/15' : hasGaps ? 'bg-amber-50' : 'bg-[#60C3AD]/10'}`}>
-            <Icon size={13} className={isEditing ? 'text-[#60C3AD]' : hasGaps ? 'text-amber-500' : 'text-[#60C3AD]'} />
+      <div className={`px-4 py-3 border-b ${isEditing ? 'border-[#60C3AD]/20 bg-[#60C3AD]/5' : 'border-[#E2E8F0]'}`}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className={`flex h-6 w-6 items-center justify-center rounded-lg shrink-0 ${isEditing ? 'bg-[#60C3AD]/15' : hasGaps ? 'bg-amber-50' : 'bg-[#60C3AD]/10'}`}>
+              <Icon size={13} className={isEditing ? 'text-[#60C3AD]' : hasGaps ? 'text-amber-500' : 'text-[#60C3AD]'} />
+            </div>
+            <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-400 truncate">{title}</h4>
           </div>
-          <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-400">{title}</h4>
-          {hasGaps && !isEditing && (
+          {!isEditing
+            ? <button type="button" onClick={() => setEditing(section)}
+                className="text-xs font-medium text-slate-400 hover:text-[#60C3AD] transition-colors shrink-0">Edit</button>
+            : <span className="text-[10px] font-semibold text-[#60C3AD] shrink-0">Editing</span>
+          }
+        </div>
+        {hasGaps && !isEditing && (
+          <div className="mt-1.5 ml-8">
             <span className="text-[9px] font-bold uppercase tracking-wide text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
               {missingLabel(missing)}
             </span>
-          )}
-        </div>
-        {!isEditing
-          ? <button type="button" onClick={() => setEditing(section)}
-              className="text-xs font-medium text-slate-400 hover:text-[#60C3AD] transition-colors">Edit</button>
-          : <span className="text-[10px] font-semibold text-[#60C3AD]">Editing</span>
-        }
+          </div>
+        )}
       </div>
     )
   }
@@ -1687,7 +1970,8 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
   )
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto scroll-smooth">
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto scroll-smooth">
 
       {/* ── Hero Header ── */}
       <div className="px-5 py-3 bg-[#F8FAFC] border-b border-[#E2E8F0]">
@@ -1733,55 +2017,44 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-3 mt-1 flex-wrap">
+            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
               {t.checkInDate && (
-                <p className="text-[11px] text-slate-400 flex items-center gap-1">
+                <span className="text-[11px] text-slate-400 flex items-center gap-1">
                   <Calendar size={10} className="shrink-0" />
-                  Move-in: {fdate(t.checkInDate)}
-                  {t.createdAt && (
-                    <span>· {new Date(t.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
-                  )}
-                </p>
+                  {fdate(t.checkInDate)}
+                </span>
               )}
               {t.status === 'vacated' && hasDues && (
-                <p className="text-[11px] font-semibold text-red-500 flex items-center gap-1">
+                <span className="text-[11px] font-semibold text-red-500 flex items-center gap-1">
                   <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse inline-block" />
-                  Vacated · ₹{ledgerBalance.toLocaleString('en-IN')} pending
-                </p>
+                  ₹{ledgerBalance.toLocaleString('en-IN')} pending
+                </span>
+              )}
+              {t.phone && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-500">{t.phone}</span>
+                  <button type="button" title="Call" onClick={() => setCallConfirmOpen(true)}
+                    className="flex items-center justify-center h-5 w-5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-colors">
+                    <PhoneCall size={9} />
+                  </button>
+                  <a href={`https://wa.me/${t.phone.replace(/[^\d]/g, '')}`} target="_blank" rel="noreferrer"
+                    title="WhatsApp"
+                    className="flex items-center justify-center h-5 w-5 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-600 transition-colors">
+                    <MessageCircle size={9} />
+                  </a>
+                  <button type="button" title="Copy phone"
+                    onClick={() => {
+                      navigator.clipboard.writeText(t.phone)
+                      setPhoneCopied(true)
+                      setTimeout(() => setPhoneCopied(false), 2000)
+                    }}
+                    className={`flex items-center justify-center h-5 w-5 rounded-full transition-colors ${phoneCopied ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-100 hover:bg-slate-200 text-slate-500'}`}>
+                    {phoneCopied ? <CheckCircle size={9} /> : <Copy size={9} />}
+                  </button>
+                </div>
               )}
             </div>
           </div>
-        </div>
-
-        {/* ── Quick Actions + Key numbers on same row (desktop) / stacked (mobile) ── */}
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {t.phone && (<>
-            <button type="button"
-              onClick={() => setCallConfirmOpen(true)}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors shadow-sm">
-              <PhoneCall size={12} className="text-slate-500" /> Call
-            </button>
-            <a href={`https://wa.me/${t.phone.replace(/[^\d]/g, '')}`} target="_blank" rel="noreferrer"
-              className="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition-colors shadow-sm">
-              <MessageCircle size={12} /> WhatsApp
-            </a>
-            <button type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(t.phone)
-                setPhoneCopied(true)
-                setTimeout(() => setPhoneCopied(false), 2000)
-              }}
-              className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm ${
-                phoneCopied
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
-              }`}>
-              {phoneCopied
-                ? <><CheckCircle size={12} className="text-emerald-500" /> Copied!</>
-                : <><Copy size={12} className="text-slate-500" /> Copy</>
-              }
-            </button>
-          </>)}
         </div>
 
         {/* Key numbers */}
@@ -1829,12 +2102,9 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
 
         {/* ── Incomplete setup banner ── */}
         {t.status === 'incomplete' && (
-          <div className="mt-2 flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
-            <AlertTriangle size={15} className="text-amber-500 shrink-0 mt-0.5" />
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-amber-800">Incomplete setup — assign a bed to activate this tenant.</p>
-              <p className="text-xs text-amber-600 mt-0.5">Rent generation and payments are disabled until a bed is assigned via Rooms &amp; Beds.</p>
-            </div>
+          <div className="mt-2 flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2">
+            <AlertTriangle size={12} className="text-amber-500 shrink-0" />
+            <p className="text-xs text-amber-700 font-medium">No bed assigned — rent &amp; payments disabled until a bed is assigned.</p>
           </div>
         )}
 
@@ -1988,7 +2258,7 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
               <div className="rounded-xl bg-white border border-violet-100 px-3 py-2">
                 <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400 mb-0.5">Expected Move-in</p>
                 <p className="text-xs font-bold text-slate-700">
-                  {t.checkInDate ? fdate(t.checkInDate) : '—'}
+                  {heldAdvance?.moveInDate ? fdate(heldAdvance.moveInDate) : t.checkInDate ? fdate(t.checkInDate) : '—'}
                 </p>
               </div>
             </div>
@@ -2275,6 +2545,9 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
           </div>
         )}
 
+        {/* ── A + B. Personal Info + Identity (2-col when viewing) ── */}
+        <div className={`grid gap-3 ${(editing === 'personal' || editing === 'identity') ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
+
         {/* ── A. Personal Info ── */}
         <div ref={personalRef} className="rounded-2xl border border-[#E2E8F0] bg-white overflow-hidden">
           <SectionHeader icon={User} title="Personal Info" section="personal" missing={personalMissing} />
@@ -2367,6 +2640,8 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
             </div>
           )}
         </div>
+
+        </div>{/* end Personal + Identity 2-col grid */}
 
         {/* ── C. Stay & Agreement ── */}
         <div ref={agreementRef} className="rounded-2xl border border-[#E2E8F0] bg-white overflow-hidden">
@@ -2922,45 +3197,44 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
               )
             })()}
 
-            {/* Quick Actions */}
-            <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2 shrink-0 flex-wrap">
-              {t.status !== 'vacated' && t.status !== 'incomplete' && (
-                <>
-                  {/* Req #5: Primary — Collect Payment */}
-                  <button type="button" onClick={() => { setPayAmt(''); setPayNotes(''); setPayRef(''); setPayMethod(filteredPaymentMethods[0]?.[0] ?? 'cash'); setPayModal(true) }}
-                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white transition-colors shadow-sm">
-                    <CreditCard size={12} />
-                    {hasDues ? `Collect ₹${(bal ?? 0).toLocaleString('en-IN')}` : 'Record Payment'}
+            {/* Row 1 — Action buttons (only when active tenant) */}
+            {t.status !== 'vacated' && t.status !== 'incomplete' && (
+              <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2 shrink-0">
+                <button type="button" onClick={() => { setPayAmt(''); setPayNotes(''); setPayRef(''); setPayMethod(filteredPaymentMethods[0]?.[0] ?? 'cash'); setPayModal(true) }}
+                  className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white transition-colors shadow-sm">
+                  <CreditCard size={12} />
+                  {hasDues ? `Collect ₹${(bal ?? 0).toLocaleString('en-IN')}` : 'Record Payment'}
+                </button>
+                {hasDues && t.depositPaid && (t.depositBalance ?? 0) > 0 && t.depositStatus !== 'adjusted' && (
+                  <button type="button" disabled={depositActing}
+                    onClick={handleDepositAdjust}
+                    className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 hover:bg-violet-100 px-3.5 py-2 text-xs font-bold text-violet-700 transition-colors shadow-sm disabled:opacity-50">
+                    <Shield size={12} /> Use Deposit
                   </button>
-                  {/* Req #5: Secondary — Use Deposit (only when dues + deposit available) */}
-                  {hasDues && t.depositPaid && (t.depositBalance ?? 0) > 0 && t.depositStatus !== 'adjusted' && (
-                    <button type="button" disabled={depositActing}
-                      onClick={handleDepositAdjust}
-                      className="flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 hover:bg-violet-100 px-3.5 py-2 text-xs font-bold text-violet-700 transition-colors shadow-sm disabled:opacity-50">
-                      <Shield size={12} /> Use Deposit
-                    </button>
-                  )}
-                  {/* Req #5: Tertiary — Add Charge */}
-                  <button type="button" onClick={() => { setChargeAmt(''); setChargeDesc(''); setChargeModal(true) }}
-                    className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-600 transition-colors shadow-sm">
-                    <Zap size={12} /> Add Charge
-                  </button>
-                </>
-              )}
-              <div className="ml-auto flex items-center gap-1.5">
-                {/* View toggle */}
-                <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden">
-                  <button type="button" onClick={() => setLedgerView('timeline')}
-                    title="Timeline view"
-                    className={`px-2.5 py-1.5 text-[10px] font-bold transition-colors ${ledgerView === 'timeline' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>
-                    Timeline
-                  </button>
-                  <button type="button" onClick={() => setLedgerView('category')}
-                    title="Category view"
-                    className={`px-2.5 py-1.5 text-[10px] font-bold transition-colors border-l border-slate-200 ${ledgerView === 'category' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>
-                    Category
-                  </button>
-                </div>
+                )}
+                <button type="button" onClick={() => { setChargeAmt(''); setChargeDesc(''); setChargeModal(true) }}
+                  className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-600 transition-colors shadow-sm">
+                  <Zap size={12} /> Add Charge
+                </button>
+              </div>
+            )}
+
+            {/* Row 2 — View / sort / export controls */}
+            <div className="px-5 py-2 border-b border-slate-100 flex items-center justify-between gap-2 shrink-0">
+              {/* View toggle */}
+              <div className="flex items-center rounded-lg border border-slate-200 bg-white overflow-hidden">
+                <button type="button" onClick={() => setLedgerView('timeline')}
+                  className={`px-2.5 py-1.5 text-[10px] font-bold transition-colors ${ledgerView === 'timeline' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>
+                  Timeline
+                </button>
+                <button type="button" onClick={() => setLedgerView('category')}
+                  className={`px-2.5 py-1.5 text-[10px] font-bold transition-colors border-l border-slate-200 ${ledgerView === 'category' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>
+                  Category
+                </button>
+              </div>
+
+              {/* Right-side controls */}
+              <div className="flex items-center gap-1.5">
                 <button type="button"
                   onClick={() => {
                     setSortFlash(true)
@@ -2968,30 +3242,25 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
                     if (ledgerView === 'timeline') setVisibleCount(20)
                     setTimeout(() => setSortFlash(false), 200)
                   }}
+                  title={sortDesc ? 'Newest first' : 'Oldest first'}
                   className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1.5 text-[10px] font-semibold text-slate-500 transition-colors whitespace-nowrap">
-                  {sortDesc ? 'Sorted by: Newest first' : 'Sorted by: Oldest first'}
+                  {sortDesc ? 'Newest' : 'Oldest'}
                   <ChevronDown size={10} className={`transition-transform duration-200 ${sortDesc ? 'rotate-180' : ''}`} />
-                </button>
-                <button type="button"
-                  onClick={() => downloadLedgerCSV(ledgerEntries, t.name)}
-                  title="Download CSV"
-                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-2 text-slate-500 transition-colors">
-                  <Download size={13} />
                 </button>
                 <button type="button"
                   onClick={() => exportLedgerXlsx({ entries: ledgerEntries, tenant: t, currentBalance: tabLedgerBalance ?? 0 })}
                   title="Download Excel (.xlsx)"
-                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-2 text-slate-500 transition-colors">
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-1.5 text-slate-500 transition-colors">
                   <FileSpreadsheet size={13} />
                 </button>
                 <button type="button"
                   onClick={() => printLedgerPDF(ledgerEntries, t, tabLedgerBalance ?? 0, t.depositBalance ?? t.depositAmount ?? 0)}
                   title="Print / PDF"
-                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-2 text-slate-500 transition-colors">
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-1.5 text-slate-500 transition-colors">
                   <Printer size={13} />
                 </button>
                 <button type="button" onClick={() => fetchLedger(ledgerPage)} title="Refresh"
-                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-2 text-slate-500 transition-colors">
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-1.5 text-slate-500 transition-colors">
                   <RefreshCw size={13} className={ledgerLoading ? 'animate-spin' : ''} />
                 </button>
               </div>
@@ -3718,6 +3987,8 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
         )}
       </div>
 
+      </div>{/* end inner scroll */}
+
       {/* ── Sticky Save/Cancel bar ── */}
       {editing !== null && activeTab === 'overview' && (
         <div className="shrink-0 flex items-center justify-between gap-3 px-5 py-3 border-t border-[#E2E8F0] bg-white">
@@ -4301,58 +4572,50 @@ export const TenantProfile = ({ tenant: t, propertyId, onVacate, onDepositToggle
       )}
 
       {/* ── Confirm Move-in Modal — reuses BedActionModal assign view ── */}
-      {confirmMoveInOpen && t.bed && (
-        <BedActionModal
-          bed={{
-            ...t.bed,
-            status: 'reserved',
-            reservation: {
-              name:              t.name,
-              phone:             t.phone,
-              reservationStatus: 'held',
-              reservationAmount: heldAdvance?.reservationAmount ?? 0,
-              reservedTill:      heldAdvance?.reservedTill ?? null,
-            },
-            tenant: null,
-          }}
-          room={t.bed.room}
-          propertyId={propertyId}
-          allRooms={confirmMoveInRooms}
-          initialView="assign"
-          zIndex="z-[70]"
-          occupancy={null}
-          onClose={() => setConfirmMoveInOpen(false)}
-          onSuccess={() => { setConfirmMoveInOpen(false); refetchProfile(); onRefetch?.() }}
-        />
-      )}
+      {confirmMoveInOpen && confirmMoveInBed && (() => {
+        const cRoom = confirmMoveInRooms.find(r => r._id === heldAdvance?.roomId) ?? confirmMoveInBed.room ?? null
+        return (
+          <BedActionModal
+            bed={{
+              ...confirmMoveInBed,
+              tenant: {
+                _id:           t._id,
+                name:          t.name,
+                phone:         t.phone,
+                rentAmount:    t.rentAmount ?? 0,
+                depositAmount: t.depositAmount ?? 0,
+                checkInDate:   t.checkInDate ?? null,
+              },
+            }}
+            room={cRoom}
+            propertyId={propertyId}
+            allRooms={confirmMoveInRooms}
+            initialView="assign"
+            zIndex="z-[70]"
+            occupancy={null}
+            onClose={() => { setConfirmMoveInOpen(false); setConfirmMoveInBed(null) }}
+            onSuccess={() => { setConfirmMoveInOpen(false); setConfirmMoveInBed(null); refetchProfile(); onRefetch?.() }}
+          />
+        )
+      })()}
 
-      {/* ── Cancel Reservation Confirm ── */}
-      {cancelResConfirmOpen && (
-        <Modal onClose={() => !cancelResActing && setCancelResConfirmOpen(false)} title="Cancel Reservation" zIndex="z-[70]" size="sm">
-          <div className="space-y-4">
-            <div className="flex items-start gap-3 rounded-xl bg-red-50 border border-red-200 px-4 py-3.5">
-              <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-slate-800">{t.name}</p>
-                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                  This will release the reserved bed
-                  {t.bed ? ` (Room ${t.bed.room?.roomNumber ?? '?'} · Bed ${t.bed.bedNumber})` : ''}.
-                  {heldAdvance ? ` The advance of ₹${heldAdvance.reservationAmount.toLocaleString('en-IN')} will need to be refunded separately.` : ''}
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button className="btn-secondary flex-1" onClick={() => setCancelResConfirmOpen(false)} disabled={cancelResActing}>Keep</button>
-              <button
-                onClick={handleCancelReservation}
-                disabled={cancelResActing}
-                className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm disabled:opacity-50">
-                <X size={14} /> {cancelResActing ? 'Cancelling…' : 'Cancel Reservation'}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      {/* ── Cancel Reservation Modal (via BedActionModal) ── */}
+      {cancelResConfirmOpen && confirmMoveInBed && (() => {
+        const cRoom = confirmMoveInRooms.find(r => r._id === heldAdvance?.roomId) ?? confirmMoveInBed.room ?? null
+        return (
+          <BedActionModal
+            bed={confirmMoveInBed}
+            room={cRoom}
+            propertyId={propertyId}
+            allRooms={confirmMoveInRooms}
+            initialView="cancelReservation"
+            zIndex="z-[70]"
+            occupancy={null}
+            onClose={() => setCancelResConfirmOpen(false)}
+            onSuccess={() => { setCancelResConfirmOpen(false); onVacate?.(t._id); refetchProfile(); onRefetch?.() }}
+          />
+        )
+      })()}
 
       {/* ── View Documents Modal ── */}
       {viewDocsOpen && (
@@ -4955,7 +5218,7 @@ const Tenants = () => {
         <>
           {/* ── Stat Cards ── */}
           {allTenants.length > 0 && (
-            <div className="flex gap-3 overflow-x-auto pb-1">
+            <div className="grid grid-cols-2 gap-3 sm:flex sm:gap-3 sm:overflow-x-auto sm:pb-1">
               <StatCard label="Total Tenants" value={stats.total} icon={Users}
                 sub={`${stats.active} active`} />
               <StatCard label="Active" value={stats.active} icon={CheckCircle} color="emerald"
@@ -4996,7 +5259,16 @@ const Tenants = () => {
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
+
+              {/* Mobile: card list */}
+              <div className="sm:hidden divide-y divide-slate-100">
+                {paginated.map(t => (
+                  <TenantCard key={t._id} tenant={t} onView={setProfile} onQuickPay={openQuickPay} />
+                ))}
+              </div>
+
+              {/* Desktop: table */}
+              <div className="hidden sm:block overflow-x-auto">
                 <table className="min-w-full">
                   <thead>
                     <tr className="border-b border-slate-100 bg-slate-50/60">
@@ -5009,13 +5281,7 @@ const Tenants = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-50/80 bg-white">
                     {paginated.map(t => (
-                      <TenantRow
-                        key={t._id}
-                        tenant={t}
-                        onView={setProfile}
-                        onQuickPay={openQuickPay}
-
-                      />
+                      <TenantRow key={t._id} tenant={t} onView={setProfile} onQuickPay={openQuickPay} />
                     ))}
                   </tbody>
                 </table>

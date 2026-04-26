@@ -55,6 +55,9 @@ const bedSchema = new mongoose.Schema(
       // converted → applied to first rent on assignment (adjust mode)
       // cancelled → reservation cancelled, advance marked for refund
       reservationStatus: { type: String, enum: ['held', 'converted', 'cancelled', null], default: null },
+      // Locked pricing snapshot — set at reservation time, used at check-in
+      expectedRent:   { type: Number, min: 0, default: null },
+      depositPlanned: { type: Number, min: 0, default: null },
     },
     blockReason: {
       type: String,

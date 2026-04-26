@@ -817,8 +817,12 @@ const getTenantProfile = asyncHandler(async (req, res) => {
   const advanceData = advance ? {
     bedId:             advance._id,
     bedNumber:         advance.bedNumber,
+    roomId:            advance.room?._id ?? null,
     roomNumber:        advance.room?.roomNumber ?? null,
     reservedTill:      advance.reservedTill,
+    moveInDate:        advance.reservation.moveInDate ?? null,
+    expectedRent:      advance.reservation.expectedRent ?? null,
+    depositPlanned:    advance.reservation.depositPlanned ?? null,
     reservationAmount: advance.reservation.reservationAmount,
     reservationMode:   advance.reservation.reservationMode,
     reservationStatus: advance.reservation.reservationStatus,

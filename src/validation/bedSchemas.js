@@ -17,9 +17,13 @@ const reserveBedSchema = z.object({
   tenantId: z.string().regex(objectIdRegex, { message: 'Invalid tenantId' }).optional(),
   name:     z.string().min(1).max(100).trim().optional(),
   phone:    z.string().min(5).max(20).trim().optional(),
-  moveInDate: z.string().refine(v => !isNaN(Date.parse(v)), { message: 'Invalid moveInDate' }).optional(),
-  notes:    z.string().max(500).trim().optional(),
-  replace:  z.boolean().optional(),
+  moveInDate:      z.string().refine(v => !isNaN(Date.parse(v)), { message: 'Invalid moveInDate' }).optional(),
+  notes:           z.string().max(500).trim().optional(),
+  replace:         z.boolean().optional(),
+  reservationAmount: z.number().min(0).max(1000000).optional(),
+  reservationMode:   z.enum(['adjust', 'refund']).optional(),
+  expectedRent:    z.number().min(0).max(100000).optional(),
+  depositPlanned:  z.number().min(0).max(1000000).optional(),
 }).refine(
   data => !!(data.tenantId || (data.name && data.phone)),
   { message: 'Provide either tenantId or both name and phone' }

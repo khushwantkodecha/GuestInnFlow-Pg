@@ -1215,6 +1215,7 @@ const TenantSearch = ({
   assignable      = false,
   excludeReserved = false,
   reservedBedId   = null,  // pass when confirming a reservation so reserved tenant is visible
+  forReservation  = false, // when true, active/notice tenants are disabled (reservations need unassigned tenants)
   selectedId,
   onSelect,
   onAddNew,
@@ -1263,7 +1264,7 @@ const TenantSearch = ({
 
   // Keyboard navigation
   const handleKeyDown = (e) => {
-    const selectable = displayList.filter(t => !t.bed)
+    const selectable = displayList.filter(t => !t.bed && !(forReservation && (t.status === 'active' || t.status === 'notice')))
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setFocusedIdx(i => {
@@ -1289,7 +1290,7 @@ const TenantSearch = ({
 
   const renderItem = (t, idx) => {
     const isSelected  = selectedId === t._id
-    const isOccupied  = !!t.bed
+    const isOccupied  = !!t.bed || (forReservation && (t.status === 'active' || t.status === 'notice'))
     const isFocused   = displayList.filter(x => !x.bed).indexOf(t) === focusedIdx
 
     return (
@@ -1329,7 +1330,11 @@ const TenantSearch = ({
             {STATUS_LABEL[t.status] ?? t.status}
           </span>
           {isOccupied
-            ? <span className="text-[9px] text-slate-400 font-medium">Already assigned</span>
+            ? <span className="text-[9px] text-slate-400 font-medium">
+                {forReservation && (t.status === 'active' || t.status === 'notice') && !t.bed
+                  ? 'Active tenant'
+                  : 'Already assigned'}
+              </span>
             : isSelected
               ? <CheckCircle2 size={13} className="text-primary-500 mt-0.5" />
               : null
@@ -1483,8 +1488,8 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
   const [resMode, setResMode] = useState('list')  // 'list' | 'create'
   const [resStep, setResStep]             = useState('tenant')   // 'tenant' | 'duration' | 'confirm'
   const [resNotesOpen, setResNotesOpen]   = useState(false)
-  // Cancel reservation — forfeit or refund choice
-  const [cancelForfeitMode, setCancelForfeitMode] = useState('refund')  // 'refund' | 'forfeit'
+  // Cancel reservation — advance disposition choice
+  const [cancelForfeitMode, setCancelForfeitMode] = useState('refund')  // 'refund' | 'forfeit' | 'credit'
 
   // Check-in advance disposition (when confirming a reserved bed with an advance)
   // 'adjust' = auto-offset against first rent | 'convert_deposit' = move to deposit | 'keep' = leave as ledger credit
@@ -1494,12 +1499,14 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
   const [resAdvanceEnabled, setResAdvanceEnabled] = useState(false)
   const [resAdvanceAmount, setResAdvanceAmount]   = useState('')
   const [resAdvanceMode, setResAdvanceMode]       = useState('adjust')  // 'adjust' | 'refund'
+  const [resRentOverrideEnabled, setResRentOverrideEnabled] = useState(false)
+  const [resExpectedRent, setResExpectedRent]     = useState('')
+  const [resDepositPlanned, setResDepositPlanned] = useState('')
 
   // Reserve — tenant selection
   const [resTenantId, setResTenantId]                   = useState(null)
   const [resSelectedTenant, setResSelectedTenant]       = useState(null)
   const [resExistingReservation, setResExistingReservation] = useState(null)
-  const [resAutoVacateConflict, setResAutoVacateConflict]   = useState(null) // { bedNumber, roomNumber }
 
   // New tenant inline form
   const [assignMode, setAssignMode]       = useState('list')  // 'list' | 'create' | 'edit'
@@ -1592,6 +1599,13 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
       // assignable=true because their tenant.bed is already set to this bed).
       setSelectedTenantId(bed.tenant._id)
       setSelectedTenantObj(bed.tenant)
+      // Pre-fill locked reservation pricing into the assign form
+      if ((bed.reservation?.expectedRent ?? 0) > 0)
+        setRentOverride(String(bed.reservation.expectedRent))
+      if ((bed.reservation?.depositPlanned ?? 0) > 0) {
+        setDepositEnabled(true)
+        setDepositInput(String(bed.reservation.depositPlanned))
+      }
     }
   }, [view])
 
@@ -1635,13 +1649,18 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
     setResTenantId(null)
     setResSelectedTenant(null)
     setResExistingReservation(null)
-    setResAutoVacateConflict(null)
     setResMode('list')
     setResStep('tenant')
+    setReservedTill('')
+    setResMoveIn('')
+    setResNotes('')
     setResNotesOpen(false)
     setResAdvanceEnabled(false)
     setResAdvanceAmount('')
     setResAdvanceMode('adjust')
+    setResRentOverrideEnabled(false)
+    setResExpectedRent('')
+    setResDepositPlanned('')
     resInitialized.current = true
   }, [view])
 
@@ -1689,6 +1708,14 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
     confirmDeleteExtra:  `Remove Extra Bed ${bed.bedNumber}`,
     editExtra:           `Edit Extra Bed ${bed.bedNumber}`,
   }
+
+  const RadioBtn = ({ value, active, color }) => (
+    <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+      active ? `border-${color}-500` : 'border-slate-300'
+    }`}>
+      {active && <span className={`h-2 w-2 rounded-full bg-${color}-500 inline-block`} />}
+    </div>
+  )
 
   return (
     <Modal title={TITLES[view]} onClose={onClose} size={view === 'changeRoom' || view === 'moveReservation' ? 'md' : 'sm'} zIndex={zIndex}>
@@ -1829,8 +1856,42 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                     </div>
                   )}
                 </div>
-                {(bed.reservation.notes || (bed.reservation.reservationAmount > 0)) && (
+                {(bed.reservation.notes || (bed.reservation.reservationAmount > 0) || (bed.reservation.expectedRent ?? 0) > 0) && (
                   <div className="border-t border-amber-100 pt-2.5 space-y-2">
+                    {/* Locked pricing summary */}
+                    {(bed.reservation.expectedRent ?? 0) > 0 && (() => {
+                      const lockedRent   = bed.reservation.expectedRent
+                      const advAmt       = bed.reservation.reservationAmount ?? 0
+                      const advMode      = bed.reservation.reservationMode
+                      const remainingDue = advMode === 'adjust' ? Math.max(0, lockedRent - advAmt) : lockedRent
+                      return (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2.5 space-y-1.5">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
+                            Reserved Rent · Locked
+                          </p>
+                          <div className="flex items-center justify-between">
+                            <span className="text-base font-bold text-slate-800 tabular-nums">
+                              ₹{lockedRent.toLocaleString('en-IN')}<span className="text-xs font-normal text-slate-400">/mo</span>
+                            </span>
+                            {advMode === 'adjust' && advAmt > 0 && (
+                              <div className="text-right">
+                                <p className="text-[10px] text-emerald-700 font-semibold">
+                                  ₹{advAmt.toLocaleString('en-IN')} advance covers rent
+                                </p>
+                                <p className="text-[10px] text-slate-500">
+                                  Remaining due: ₹{remainingDue.toLocaleString('en-IN')}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                          {bed.reservation.depositPlanned > 0 && (
+                            <p className="text-[10px] text-slate-500">
+                              ₹{bed.reservation.depositPlanned.toLocaleString('en-IN')} deposit planned at move-in
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })()}
                     {bed.reservation.reservationAmount > 0 && (() => {
                       const advAmt    = bed.reservation.reservationAmount
                       const advMode   = bed.reservation.reservationMode
@@ -1894,37 +1955,49 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
           )}
 
           {/* ── Rent row ── */}
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <div className="h-7 w-7 rounded-lg bg-primary-50 border border-primary-100 flex items-center justify-center shrink-0">
-                <IndianRupee size={12} className="text-primary-500" />
+          {(() => {
+            // Pricing source hierarchy (spec-defined):
+            // 1. Reserved snapshot  2. Active tenant rate  3. Bed default
+            const lockedRent      = bed.status === 'reserved' && (bed.reservation?.expectedRent ?? 0) > 0
+              ? bed.reservation.expectedRent : null
+            const activeTenantRent = bed.status === 'occupied' && (bed.tenant?.rentAmount ?? 0) > 0
+              ? bed.tenant.rentAmount : null
+            const shownRent = lockedRent ?? activeTenantRent ?? displayRent
+            const isCustomTenantRate = activeTenantRent !== null && activeTenantRent !== displayRent
+            return (
+              <div className="flex items-center justify-between rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <div className="h-7 w-7 rounded-lg bg-primary-50 border border-primary-100 flex items-center justify-center shrink-0">
+                    <IndianRupee size={12} className="text-primary-500" />
+                  </div>
+                  <span className="text-xs font-semibold text-slate-500">Monthly Rent</span>
+                </div>
+                <div className="text-right">
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-base font-extrabold text-slate-800 tabular-nums tracking-tight">
+                      ₹{shownRent?.toLocaleString('en-IN')}
+                    </span>
+                    <span className="text-xs text-slate-400">/mo</span>
+                  </div>
+                  {lockedRent !== null ? (
+                    <p className="text-[10px] text-amber-600 font-semibold mt-0.5">Reserved Rate Locked</p>
+                  ) : bed.isExtra ? (
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {!bed.isChargeable
+                        ? 'Extra Bed · Free'
+                        : bed.extraCharge > 0
+                          ? 'Extra Bed · Fixed charge'
+                          : 'Extra Bed · Uses room base rent'}
+                    </p>
+                  ) : isCustomTenantRate ? (
+                    <p className="text-[10px] text-amber-500 mt-0.5">Custom rate · bed default ₹{displayRent.toLocaleString('en-IN')}</p>
+                  ) : (
+                    <p className="text-[10px] text-slate-400 mt-0.5">Per Bed · Fixed</p>
+                  )}
+                </div>
               </div>
-              <span className="text-xs font-semibold text-slate-500">Monthly Rent</span>
-            </div>
-            <div className="text-right">
-              <div className="flex items-baseline gap-1">
-                <span className="text-base font-extrabold text-slate-800 tabular-nums tracking-tight">
-                  ₹{displayRent?.toLocaleString('en-IN')}
-                </span>
-                <span className="text-xs text-slate-400">/mo</span>
-              </div>
-              {bed.isExtra ? (
-                <p className="text-[10px] text-slate-400 mt-0.5">
-                  {!bed.isChargeable
-                    ? 'Extra Bed · Free'
-                    : bed.extraCharge > 0
-                      ? 'Extra Bed · Fixed charge'
-                      : 'Extra Bed · Uses room base rent'}
-                </p>
-              ) : overrideRent !== null ? (
-                <p className="text-[10px] text-amber-500 mt-0.5">
-                  {bed.status === 'occupied' ? 'Tenant' : 'Last tenant'} pays ₹{overrideRent.toLocaleString('en-IN')} (custom override)
-                </p>
-              ) : (
-                <p className="text-[10px] text-slate-400 mt-0.5">Per Bed · Fixed</p>
-              )}
-            </div>
-          </div>
+            )
+          })()}
 
           <div className="border-t border-slate-100" />
 
@@ -2015,6 +2088,13 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                     if (bed.reservation?.name)     setNewName(bed.reservation.name)
                     if (bed.reservation?.phone)    setNewPhone(bed.reservation.phone)
                     if (bed.reservation?.moveInDate) setMoveInDate(new Date(bed.reservation.moveInDate).toISOString().split('T')[0])
+                    // Pre-fill locked reservation pricing
+                    if ((bed.reservation?.expectedRent ?? 0) > 0)
+                      setRentOverride(String(bed.reservation.expectedRent))
+                    if ((bed.reservation?.depositPlanned ?? 0) > 0) {
+                      setDepositEnabled(true)
+                      setDepositInput(String(bed.reservation.depositPlanned))
+                    }
                     // Default disposition to 'adjust' for adjust-mode reservations, else 'keep'
                     setAdvanceDisposition(bed.reservation?.reservationMode === 'adjust' ? 'adjust' : 'keep')
                     setAssignMode('create')
@@ -2266,14 +2346,7 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
           }
         })()
 
-        // Radio option renderer
-        const RadioBtn = ({ value, active, color }) => (
-          <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
-            active ? `border-${color}-500` : 'border-slate-300'
-          }`}>
-            {active && <span className={`h-2 w-2 rounded-full bg-${color}-500 inline-block`} />}
-          </div>
-        )
+        // RadioBtn is defined at component scope above
 
         return (
         <div className="space-y-4">
@@ -3282,7 +3355,12 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
 
           {/* ── Reservation Advance Disposition (only when coming from a reserved bed) ── */}
           {bed.status === 'reserved' && (bed.reservation?.reservationAmount ?? 0) > 0 && (() => {
-            const rAmt  = bed.reservation.reservationAmount
+            const rAmt     = bed.reservation.reservationAmount
+            const rMode    = bed.reservation.reservationMode ?? 'adjust'
+            const baseRent = (bed.reservation?.expectedRent ?? 0) > 0
+              ? bed.reservation.expectedRent
+              : displayRent
+            const carryFwd = baseRent > 0 ? baseRent - rAmt : null
             return (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -3294,10 +3372,16 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                       Reservation Advance · ₹{rAmt.toLocaleString('en-IN')}
                     </p>
                   </div>
-                  <p className="text-[10px] text-violet-500">How should this be applied?</p>
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                    rMode === 'adjust'
+                      ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                      : 'bg-violet-50 text-violet-600 border border-violet-200'
+                  }`}>
+                    {rMode === 'adjust' ? 'Rent Credit' : 'Refundable Hold'}
+                  </span>
                 </div>
                 <div className="space-y-1.5">
-                  {/* Option A — Adjust against first rent */}
+                  {/* Option A — Apply as rent credit */}
                   <button type="button"
                     onClick={() => setAdvanceDisposition('adjust')}
                     className={`w-full text-left rounded-xl border px-3 py-2.5 transition-all ${
@@ -3309,10 +3393,13 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                       <RadioBtn value="adjust" active={advanceDisposition === 'adjust'} color="emerald" />
                       <div>
                         <p className={`text-xs font-bold ${advanceDisposition === 'adjust' ? 'text-emerald-800' : 'text-slate-700'}`}>
-                          Offset against first rent
+                          Apply as rent credit
                         </p>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          ₹{rAmt.toLocaleString('en-IN')} will auto-reduce the first billing cycle
+                          {carryFwd !== null && carryFwd <= 0
+                            ? `First month covered${carryFwd < 0 ? ` · ₹${Math.abs(carryFwd).toLocaleString('en-IN')} carry-forward credit` : ''}`
+                            : `₹${rAmt.toLocaleString('en-IN')} offsets first rent · ${carryFwd !== null ? `₹${carryFwd.toLocaleString('en-IN')} balance remaining` : 'auto-applied at move-in'}`
+                          }
                         </p>
                       </div>
                     </div>
@@ -3515,11 +3602,15 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
           setSubmitting(true)
           try {
             await cancelReservationApi(propertyId, room._id, bed._id, {
-              forfeit: forfeitMode === 'forfeit',
+              forfeit:         forfeitMode === 'forfeit',
+              convertToCredit: forfeitMode === 'credit',
             })
-            toast(forfeitMode === 'forfeit'
+            const msg = forfeitMode === 'forfeit'
               ? 'Reservation cancelled — advance forfeited'
-              : 'Reservation cancelled', 'success')
+              : forfeitMode === 'credit'
+                ? 'Reservation cancelled — advance kept as wallet credit'
+                : 'Reservation cancelled'
+            toast(msg, 'success')
             onSuccess()
           } catch (err) {
             toast(err.response?.data?.message || 'Something went wrong', 'error')
@@ -3604,12 +3695,37 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                   </div>
                 </button>
 
+                {/* Convert to credit option */}
+                <button type="button"
+                  onClick={() => setForfeitMode('credit')}
+                  className={`w-full text-left rounded-xl border px-4 py-3 transition-all ${
+                    forfeitMode === 'credit'
+                      ? 'border-violet-400 bg-violet-50 shadow-sm'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}>
+                  <div className="flex items-center gap-2.5">
+                    <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                      forfeitMode === 'credit' ? 'border-violet-500' : 'border-slate-300'
+                    }`}>
+                      {forfeitMode === 'credit' && <span className="h-2 w-2 rounded-full bg-violet-500 inline-block" />}
+                    </div>
+                    <div>
+                      <p className={`text-xs font-bold ${forfeitMode === 'credit' ? 'text-violet-800' : 'text-slate-700'}`}>
+                        Keep as wallet credit
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        ₹{advAmt.toLocaleString('en-IN')} stays in tenant's ledger · Offsets future rent
+                      </p>
+                    </div>
+                  </div>
+                </button>
+
                 {/* Mode note */}
                 {advMode === 'refund' && forfeitMode === 'forfeit' && (
                   <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
                     <AlertTriangle size={12} className="text-amber-500 shrink-0 mt-0.5" />
                     <p className="text-[11px] text-amber-700 leading-relaxed">
-                      This advance was marked as "refundable on cancel." Forfeiting overrides that agreement.
+                      This advance was collected as a <span className="font-semibold">Refundable Hold</span>. Forfeiting overrides that agreement.
                     </p>
                   </div>
                 )}
@@ -3634,10 +3750,15 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                 className={`flex-1 rounded-xl py-2.5 text-sm font-bold text-white transition-colors shadow-md disabled:opacity-50 active:scale-[0.98] ${
                   forfeitMode === 'forfeit'
                     ? 'bg-red-600 hover:bg-red-700 shadow-red-200/40'
-                    : 'bg-slate-700 hover:bg-slate-800 shadow-slate-200/40'
+                    : forfeitMode === 'credit'
+                      ? 'bg-violet-600 hover:bg-violet-700 shadow-violet-200/40'
+                      : 'bg-slate-700 hover:bg-slate-800 shadow-slate-200/40'
                 }`}
                 onClick={doCancel}>
-                {submitting ? 'Cancelling…' : forfeitMode === 'forfeit' ? 'Cancel & Forfeit' : 'Cancel & Refund'}
+                {submitting ? 'Cancelling…'
+                  : forfeitMode === 'forfeit' ? 'Cancel & Forfeit'
+                  : forfeitMode === 'credit'  ? 'Cancel & Keep Credit'
+                  : 'Cancel & Refund'}
               </button>
             </div>
           </div>
@@ -3769,6 +3890,8 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
               ...(resMoveIn       && { moveInDate: resMoveIn }),
               ...(resNotes.trim() && { notes: resNotes.trim() }),
               ...(advAmt > 0 && { reservationAmount: advAmt, reservationMode: resAdvanceMode }),
+              ...(resRentOverrideEnabled && Number(resExpectedRent) > 0 && { expectedRent: Number(resExpectedRent) }),
+              ...(Number(resDepositPlanned) > 0 && { depositPlanned: Number(resDepositPlanned) }),
               ...opts,
             })
             toast(opts.replace ? 'Reservation replaced' : 'Bed reserved', 'success')
@@ -3777,69 +3900,12 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
             const code = err.response?.data?.code
             if (code === 'TENANT_ALREADY_RESERVED') {
               setResExistingReservation(err.response.data.existingReservation)
-            } else if (code === 'TENANT_ASSIGNED_AUTO_VACATE') {
-              setResAutoVacateConflict(err.response.data.currentAssignment)
             } else {
               toast(err.response?.data?.message || 'Something went wrong', 'error')
             }
           } finally {
             setSubmitting(false)
           }
-        }
-
-        // ── Auto-vacate confirmation overlay ──────────────────────────────────
-        // Shown when an active/notice tenant is selected but is currently assigned
-        // to a bed. The operator must confirm before we release the old bed.
-        if (resAutoVacateConflict) {
-          const av = resAutoVacateConflict
-          return (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 rounded-2xl bg-orange-50 border border-orange-200 px-4 py-4">
-                <div className="h-9 w-9 rounded-xl bg-orange-100 border border-orange-200 flex items-center justify-center shrink-0">
-                  <AlertTriangle size={16} className="text-orange-600" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-orange-800">Tenant is currently assigned</p>
-                  <p className="text-[11px] text-orange-700 mt-0.5 leading-relaxed">
-                    <span className="font-semibold">{resSelectedTenant?.name}</span> is in
-                    Bed {av.bedNumber}{av.roomNumber ? `, Room ${av.roomNumber}` : ''}.
-                    Reserving this bed will release their current bed.
-                  </p>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">What will happen</p>
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2 text-xs text-slate-600">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0 inline-block" />
-                    Bed {av.bedNumber} will be freed and marked vacant
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-slate-600">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 inline-block" />
-                    Tenant status moves to Reserved (pending new move-in)
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-slate-600">
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0 inline-block" />
-                    Deposit and pending dues are not automatically settled
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <button type="button"
-                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors shadow-sm"
-                  onClick={() => setResAutoVacateConflict(null)}>
-                  Cancel
-                </button>
-                <button type="button" disabled={submitting}
-                  className="flex-1 rounded-xl bg-orange-500 hover:bg-orange-600 py-2.5 text-sm font-bold text-white transition-colors shadow-md shadow-orange-200/40 disabled:opacity-50 active:scale-[0.98]"
-                  onClick={() => doReserve({ autoVacate: true })}>
-                  {submitting ? 'Moving…' : 'Release & Reserve'}
-                </button>
-              </div>
-            </div>
-          )
         }
 
         // ── Conflict overlay — replaces entire step flow ──────────────────────
@@ -3956,6 +4022,14 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
             {resStep === 'tenant' && (
               <div className="space-y-3">
 
+                {/* Bed rent summary */}
+                <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 py-2.5">
+                  <p className="text-[11px] text-slate-500">Bed rent at move-in</p>
+                  <p className="text-sm font-bold text-slate-800 tabular-nums">
+                    ₹{displayRent.toLocaleString('en-IN')}<span className="text-xs font-normal text-slate-400">/mo</span>
+                  </p>
+                </div>
+
                 {/* STATE 1 — LIST MODE (kept in DOM; fades out so exit is animated) */}
                 <div className="relative">
                   <div
@@ -3970,11 +4044,31 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                       propertyId={propertyId}
                       assignable
                       excludeReserved
+                      forReservation
                       selectedId={resTenantId}
-                      onSelect={t => {
+                      onSelect={async t => {
                         setResTenantId(t._id)
                         setResSelectedTenant(t)
                         setResExistingReservation(null)
+                        // Hydrate financials from tenant record
+                        let full = t
+                        if (t.status === 'incomplete') {
+                          try {
+                            const r = await getTenant(propertyId, t._id)
+                            full = r.data?.data ?? t
+                            setResSelectedTenant(full)
+                          } catch (_) { /* non-fatal */ }
+                        }
+                        setResDepositPlanned((full.depositAmount ?? 0) > 0 ? String(full.depositAmount) : '')
+                        if ((full.rentAmount ?? 0) > 0) {
+                          setResRentOverrideEnabled(true)
+                          setResExpectedRent(String(full.rentAmount))
+                        } else {
+                          setResRentOverrideEnabled(false)
+                          setResExpectedRent('')
+                        }
+                        if (full.checkInDate)
+                          setResMoveIn(new Date(full.checkInDate).toISOString().split('T')[0])
                       }}
                       onAddNew={q => {
                         setResMode('create')
@@ -4160,6 +4254,16 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                                 onClick={() => {
                                   setResTenantId(phoneConflict._id)
                                   setResSelectedTenant(phoneConflict)
+                                  setResDepositPlanned((phoneConflict.depositAmount ?? 0) > 0 ? String(phoneConflict.depositAmount) : '')
+                                  if ((phoneConflict.rentAmount ?? 0) > 0) {
+                                    setResRentOverrideEnabled(true)
+                                    setResExpectedRent(String(phoneConflict.rentAmount))
+                                  } else {
+                                    setResRentOverrideEnabled(false)
+                                    setResExpectedRent('')
+                                  }
+                                  if (phoneConflict.checkInDate)
+                                    setResMoveIn(new Date(phoneConflict.checkInDate).toISOString().split('T')[0])
                                   setResMode('list')
                                   setNewName(''); setNewPhone(''); setPhoneConflict(null)
                                 }}
@@ -4174,6 +4278,14 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                   </div>
                 )}
                 </div>{/* end .relative wrapper */}
+
+                {/* Incomplete profile warning */}
+                {resSelectedTenant?.status === 'incomplete' && (
+                  <div className="flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5">
+                    <AlertTriangle size={12} className="text-amber-500 shrink-0" />
+                    <p className="text-[11px] font-semibold text-amber-700">Incomplete setup — details pre-filled from saved profile</p>
+                  </div>
+                )}
 
                 {/* Blocked: selected tenant already occupies a bed */}
                 {isBlocked && (
@@ -4237,6 +4349,7 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                         Move-in <span className="font-normal text-slate-400">(optional)</span>
                       </label>
                       <input type="date" className="input text-sm"
+                        max={reservedTill || undefined}
                         value={resMoveIn} onChange={e => setResMoveIn(e.target.value)} />
                     </div>
                   </div>
@@ -4293,8 +4406,8 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                         <label className="label text-xs mb-1.5">Apply as</label>
                         <div className="flex gap-2">
                           {[
-                            { value: 'adjust', label: 'Adjust against rent', hint: 'Deducted from first month' },
-                            { value: 'refund', label: 'Refund on cancel',    hint: 'Returned if reservation cancelled' },
+                            { value: 'adjust', label: 'Apply as Rent Credit',     hint: 'Credit auto-applied at move-in · carry-forward if advance > rent' },
+                            { value: 'refund', label: 'Keep as Refundable Hold',  hint: 'Held separately · choose at move-in how to apply' },
                           ].map(opt => (
                             <button key={opt.value} type="button"
                               onClick={() => setResAdvanceMode(opt.value)}
@@ -4311,8 +4424,127 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                           ))}
                         </div>
                       </div>
+
+                      {/* Live move-in preview */}
+                      {resAdvanceAmount && Number(resAdvanceAmount) > 0 && (() => {
+                        const advP  = Number(resAdvanceAmount)
+                        const rentP = resRentOverrideEnabled && Number(resExpectedRent) > 0
+                          ? Number(resExpectedRent)
+                          : displayRent
+                        const isCredit = resAdvanceMode === 'adjust'
+                        const balance  = rentP - advP
+                        return (
+                          <div className="rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5 space-y-1.5">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Move-in Preview</p>
+                            <div className="space-y-1">
+                              <div className="flex justify-between">
+                                <span className="text-[11px] text-slate-500">Rent due</span>
+                                <span className="text-[11px] font-semibold text-slate-700">₹{rentP.toLocaleString('en-IN')}/mo</span>
+                              </div>
+                              {isCredit ? (
+                                <>
+                                  <div className="flex justify-between">
+                                    <span className="text-[11px] text-slate-500">Advance credit</span>
+                                    <span className="text-[11px] font-semibold text-emerald-600">−₹{advP.toLocaleString('en-IN')}</span>
+                                  </div>
+                                  <div className="border-t border-slate-200 pt-1 flex justify-between">
+                                    {balance <= 0 ? (
+                                      <>
+                                        <span className="text-[11px] font-bold text-emerald-700">First month covered</span>
+                                        {balance < 0 && (
+                                          <span className="text-[11px] font-bold text-emerald-700">₹{Math.abs(balance).toLocaleString('en-IN')} carry-forward</span>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span className="text-[11px] font-bold text-slate-700">Balance due at move-in</span>
+                                        <span className="text-[11px] font-bold text-amber-600">₹{balance.toLocaleString('en-IN')}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className="flex justify-between">
+                                    <span className="text-[11px] text-slate-500">Refundable hold</span>
+                                    <span className="text-[11px] font-semibold text-violet-600">₹{advP.toLocaleString('en-IN')}</span>
+                                  </div>
+                                  <div className="border-t border-slate-200 pt-1 flex justify-between">
+                                    <span className="text-[11px] font-bold text-slate-700">Full rent due at move-in</span>
+                                    <span className="text-[11px] font-bold text-slate-800">₹{rentP.toLocaleString('en-IN')}</span>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })()}
                     </div>
                   )}
+                </div>
+
+                {/* ── Rent & deposit at move-in ── */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-3">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    At Move-in <span className="normal-case font-normal text-slate-400">(optional)</span>
+                  </p>
+
+                  {/* Rent row */}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-700">
+                        Rent at move-in: <span className="text-slate-900">
+                          {resRentOverrideEnabled && Number(resExpectedRent) > 0
+                            ? `₹${Number(resExpectedRent).toLocaleString('en-IN')}/mo`
+                            : `₹${displayRent.toLocaleString('en-IN')}/mo`
+                          }
+                        </span>
+                      </p>
+                      <p className="text-[10px] mt-0.5">
+                        {resRentOverrideEnabled
+                          ? <span className="font-semibold text-amber-600">Override active</span>
+                          : <span className="text-slate-400">Bed default</span>
+                        }
+                      </p>
+                    </div>
+                    <button type="button"
+                      onClick={() => {
+                        setResRentOverrideEnabled(v => !v)
+                        if (resRentOverrideEnabled) setResExpectedRent('')
+                      }}
+                      className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                        resRentOverrideEnabled
+                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      }`}>
+                      {resRentOverrideEnabled ? 'Use default' : 'Override'}
+                    </button>
+                  </div>
+
+                  {resRentOverrideEnabled && (
+                    <div>
+                      <label className="label text-xs">Override rent (₹/mo)</label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">₹</span>
+                        <input type="number" min="0" className="input text-sm pl-6"
+                          placeholder={`${displayRent}`}
+                          value={resExpectedRent}
+                          onChange={e => setResExpectedRent(e.target.value)} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Deposit row */}
+                  <div>
+                    <label className="label text-xs">Planned Deposit (₹)</label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">₹</span>
+                      <input type="number" min="0" className="input text-sm pl-6"
+                        placeholder="0"
+                        value={resDepositPlanned}
+                        onChange={e => setResDepositPlanned(e.target.value)} />
+                    </div>
+                  </div>
                 </div>
 
                 {/* Step footer */}
@@ -4382,7 +4614,7 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                     </button>
                   </div>
 
-                  {/* Advance pill — only shown if advance was entered */}
+                  {/* Advance pill */}
                   {advAmt > 0 && (
                     <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3">
                       <div className="h-8 w-8 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
@@ -4393,67 +4625,104 @@ export const BedActionModal = ({ bed, room, propertyId, onClose, onSuccess, occu
                           ₹{advAmt.toLocaleString('en-IN')} advance collected
                         </p>
                         <p className="text-[11px] text-emerald-600">
-                          {resAdvanceMode === 'adjust'
-                            ? 'Will be adjusted against first month rent'
-                            : 'Will be refunded if reservation is cancelled'}
+                          {resAdvanceMode === 'adjust' ? (() => {
+                            const rentP = resRentOverrideEnabled && Number(resExpectedRent) > 0
+                              ? Number(resExpectedRent)
+                              : displayRent
+                            const bal = rentP - advAmt
+                            if (bal <= 0)
+                              return bal < 0
+                                ? `Applied as rent credit · ₹${Math.abs(bal).toLocaleString('en-IN')} carry-forward`
+                                : 'Applied as rent credit · first month fully covered'
+                            return `Applied as rent credit · ₹${bal.toLocaleString('en-IN')} balance due at move-in`
+                          })() : 'Held as refundable amount — choose how to apply at move-in'}
                         </p>
                       </div>
-                      <button type="button"
-                        onClick={() => setResStep('duration')}
+                      <button type="button" onClick={() => setResStep('duration')}
                         className="shrink-0 text-[11px] font-semibold text-primary-600 hover:text-primary-700 transition-colors">
                         Edit
                       </button>
                     </div>
                   )}
+
+                  {/* Rent + deposit summary pill */}
+                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3">
+                    <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
+                      <IndianRupee size={14} className="text-slate-500" />
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <p className="text-sm font-bold text-slate-800">
+                        ₹{(resRentOverrideEnabled && Number(resExpectedRent) > 0
+                          ? Number(resExpectedRent)
+                          : displayRent
+                        ).toLocaleString('en-IN')}/mo rent
+                        {resRentOverrideEnabled && Number(resExpectedRent) > 0 && (
+                          <span className="ml-1.5 text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">override</span>
+                        )}
+                      </p>
+                      {Number(resDepositPlanned) > 0 && (
+                        <p className="text-[11px] text-slate-500">
+                          ₹{Number(resDepositPlanned).toLocaleString('en-IN')} deposit planned
+                        </p>
+                      )}
+                      <p className="text-[10px] text-slate-400">Applied automatically at check-in</p>
+                    </div>
+                    <button type="button" onClick={() => setResStep('duration')}
+                      className="shrink-0 text-[11px] font-semibold text-primary-600 hover:text-primary-700 transition-colors">
+                      Edit
+                    </button>
+                  </div>
                 </div>
 
-                {/* ── Rent preview ── */}
-                {rentPreviewLoading ? (
-                  <div className="rounded-xl border border-slate-100 bg-slate-50/40 px-3.5 py-3 flex items-center gap-2.5">
-                    <Spinner />
-                    <span className="text-[11px] text-slate-400">Calculating estimate…</span>
-                  </div>
-                ) : rentPreview ? (() => {
-                  const rp = rentPreview
-                  const typeLabel = rp.isExtra ? 'Extra Bed' : 'Per Bed'
-                  return (
-                    <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
-                          <IndianRupee size={9} /> Expected Rent
-                        </p>
-                        <span className="text-[9px] font-semibold text-slate-400 bg-slate-100 rounded-full px-2 py-0.5">
-                          {typeLabel}
-                        </span>
-                      </div>
-
-                      <div className="flex items-end justify-between gap-2">
-                        <div>
-                          <p className="text-2xl font-black text-slate-800 leading-none tabular-nums">
-                            {rp.finalRent === 0
-                              ? <span className="text-emerald-600">Free</span>
-                              : <>₹{rp.finalRent.toLocaleString('en-IN')}<span className="text-sm font-semibold text-slate-400">/mo</span></>
-                            }
-                          </p>
-                          <p className="text-[11px] text-slate-400 mt-1">{rp.formula}</p>
-                        </div>
-                      </div>
-
-                      {rp.isOverCapacity && (
-                        <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
-                          <AlertTriangle size={10} className="text-amber-500 shrink-0" />
-                          <p className="text-[10px] text-amber-700 font-medium">
-                            Over capacity — rent split may change at assignment
-                          </p>
-                        </div>
-                      )}
-
-                      <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-2">
-                        Final rent locked at time of assignment
-                      </p>
+                {/* ── Rent preview — hidden when operator has set an override ── */}
+                {!(resRentOverrideEnabled && Number(resExpectedRent) > 0) && (
+                  rentPreviewLoading ? (
+                    <div className="rounded-xl border border-slate-100 bg-slate-50/40 px-3.5 py-3 flex items-center gap-2.5">
+                      <Spinner />
+                      <span className="text-[11px] text-slate-400">Calculating estimate…</span>
                     </div>
-                  )
-                })() : null}
+                  ) : rentPreview ? (() => {
+                    const rp = rentPreview
+                    const typeLabel = rp.isExtra ? 'Extra Bed' : 'Per Bed'
+                    return (
+                      <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                            <IndianRupee size={9} /> Expected Rent
+                          </p>
+                          <span className="text-[9px] font-semibold text-slate-400 bg-slate-100 rounded-full px-2 py-0.5">
+                            {typeLabel}
+                          </span>
+                        </div>
+
+                        <div className="flex items-end justify-between gap-2">
+                          <div>
+                            <p className="text-2xl font-black text-slate-800 leading-none tabular-nums">
+                              {rp.finalRent === 0
+                                ? <span className="text-emerald-600">Free</span>
+                                : <>₹{rp.finalRent.toLocaleString('en-IN')}<span className="text-sm font-semibold text-slate-400">/mo</span></>
+                              }
+                            </p>
+                            <p className="text-[11px] text-slate-400 mt-1">{rp.formula}</p>
+                          </div>
+                        </div>
+
+                        {rp.isOverCapacity && (
+                          <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
+                            <AlertTriangle size={10} className="text-amber-500 shrink-0" />
+                            <p className="text-[10px] text-amber-700 font-medium">
+                              Over capacity — rent split may change at assignment
+                            </p>
+                          </div>
+                        )}
+
+                        <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-2">
+                          Final rent locked at time of assignment
+                        </p>
+                      </div>
+                    )
+                  })() : null
+                )}
 
                 {/* ── Notes — collapsible ── */}
                 <div className="rounded-xl border border-slate-200 overflow-hidden">
