@@ -12,7 +12,7 @@ export default function Topbar() {
   const title = Object.entries(TITLES).find(([k]) => pathname.startsWith(k))?.[1] ?? 'DormAxis'
 
   return (
-    <header className="h-14 bg-white border-b border-slate-200 flex items-center px-6 shrink-0">
+    <header className="h-14 bg-white border-b border-slate-200 flex items-center px-4 sm:px-6 shrink-0">
       <h1 className="text-[14px] font-semibold text-slate-700">{title}</h1>
     </header>
   )

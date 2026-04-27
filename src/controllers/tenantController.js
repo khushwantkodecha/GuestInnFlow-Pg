@@ -139,12 +139,13 @@ const getTenants = asyncHandler(async (req, res) => {
 
 // GET /api/properties/:propertyId/tenants/:id
 const getTenant = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.id, property: req.params.propertyId }).populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } }),
+  ]);
   if (!property) {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
-
-  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId }).populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } });
   if (!tenant) {
     return res.status(404).json({ success: false, message: 'Tenant not found' });
   }
@@ -377,12 +378,13 @@ const updateTenant = asyncHandler(async (req, res) => {
 //   checkOutDate, notes, vacateOption, paymentAmount, paymentMethod,
 //   depositAction, refundAmount, refundMethod
 const vacateTenant = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.id, property: req.params.propertyId }),
+  ]);
   if (!property) {
     return res.status(404).json({ success: false, message: 'Property not found' });
   }
-
-  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId });
   if (!tenant) {
     return res.status(404).json({ success: false, message: 'Tenant not found' });
   }
@@ -494,10 +496,11 @@ const vacateTenant = asyncHandler(async (req, res) => {
 // GET /api/properties/:propertyId/tenants/:tenantId/advance
 // Returns the held reservation advance for the tenant (if any).
 const getTenantAdvance = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
 
   // Find the bed that holds this tenant's reservation advance
@@ -530,10 +533,11 @@ const getTenantAdvance = asyncHandler(async (req, res) => {
 // POST /api/properties/:propertyId/tenants/:tenantId/advance/apply
 // Manually apply the held advance as a ledger credit (adjust mode).
 const applyTenantAdvance = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
 
   const bed = await Bed.findOne({
@@ -574,10 +578,11 @@ const applyTenantAdvance = asyncHandler(async (req, res) => {
 // POST /api/properties/:propertyId/tenants/:tenantId/advance/refund
 // Manually mark the held advance as refunded (creates a refund ledger entry).
 const refundTenantAdvance = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
 
   const bed = await Bed.findOne({
@@ -623,10 +628,11 @@ const refundTenantAdvance = asyncHandler(async (req, res) => {
 // POST /api/properties/:propertyId/tenants/:tenantId/deposit/adjust
 // Apply the security deposit against outstanding rent dues.
 const adjustDeposit = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
 
   const depositBal = tenant.depositBalance ?? 0;
@@ -686,10 +692,11 @@ const adjustDeposit = asyncHandler(async (req, res) => {
 // POST /api/properties/:propertyId/tenants/:tenantId/deposit/refund
 // Mark the security deposit as refunded (returned to tenant in cash).
 const refundDeposit = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.tenantId, property: req.params.propertyId });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
 
   const depositBal = tenant.depositBalance ?? 0;
@@ -730,10 +737,11 @@ const refundDeposit = asyncHandler(async (req, res) => {
 //
 // Body: { billingStartDate: ISO date string, reason?: string }
 const fixBillingStart = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.id, property: req.params.propertyId }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
 
   const { billingStartDate, reason } = req.body;
@@ -777,11 +785,12 @@ const fixBillingStart = asyncHandler(async (req, res) => {
 // Single aggregated endpoint replacing 4 separate profile API calls.
 // Returns: tenant + rents + ledger (balance + recent entries) + advance + invoices
 const getTenantProfile = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.id, property: req.params.propertyId })
+      .populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId })
-    .populate({ path: 'bed', select: 'bedNumber room', populate: { path: 'room', select: 'roomNumber floor' } });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
 
   // Ensure current cycle rent exists (lazy generation), suppress errors
@@ -846,10 +855,11 @@ const getTenantProfile = asyncHandler(async (req, res) => {
 // This is an alias that wraps the same vacateBedCore/vacateTenantCore logic
 // with explicit POST semantics for the frontend.
 const vacateWithPayment = asyncHandler(async (req, res) => {
-  const property = await Property.findOne({ _id: req.params.propertyId, owner: req.user._id });
+  const [property, tenant] = await Promise.all([
+    Property.findOne({ _id: req.params.propertyId, owner: req.user._id }),
+    Tenant.findOne({ _id: req.params.id, property: req.params.propertyId }),
+  ]);
   if (!property) return res.status(404).json({ success: false, message: 'Property not found' });
-
-  const tenant = await Tenant.findOne({ _id: req.params.id, property: req.params.propertyId });
   if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
   if (tenant.status === 'vacated') {
     return res.status(400).json({ success: false, message: 'Tenant is already vacated' });

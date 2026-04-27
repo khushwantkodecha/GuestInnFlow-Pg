@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -23,6 +23,7 @@ import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
 import { useToast } from '../context/ToastContext'
 import Spinner from '../components/ui/Spinner'
+import { TenantsSkeleton } from '../components/ui/Skeleton'
 import EmptyState from '../components/ui/EmptyState'
 import Badge from '../components/ui/Badge'
 import Modal from '../components/ui/Modal'
@@ -130,7 +131,7 @@ const RENT_STATUS_CFG = {
   pending:  { label: 'Pending',  cls: 'text-orange-700 bg-orange-50 border-orange-200' },
   overdue:  { label: 'Overdue',  cls: 'text-red-700 bg-red-50 border-red-200' },
 }
-const RentStatusBadge = ({ tenant }) => {
+const RentStatusBadge = memo(({ tenant }) => {
   const rs = computeRentStatus(tenant)
   if (!rs) return <span className="text-xs text-slate-300 font-medium">—</span>
   const { label, cls } = RENT_STATUS_CFG[rs]
@@ -139,7 +140,7 @@ const RentStatusBadge = ({ tenant }) => {
       {label}
     </span>
   )
-}
+})
 
 // ── Health dot ────────────────────────────────────────────────────────────────
 const HEALTH_CFG = {
@@ -147,12 +148,12 @@ const HEALTH_CFG = {
   risk:     { dot: 'bg-amber-400',   title: 'At Risk' },
   critical: { dot: 'bg-red-500',     title: 'Critical' },
 }
-const HealthDot = ({ tenant }) => {
+const HealthDot = memo(({ tenant }) => {
   const score = computeHealthScore(tenant)
   if (!score) return null
   const { dot, title } = HEALTH_CFG[score]
   return <span className={`inline-block h-2 w-2 rounded-full shrink-0 ${dot}`} title={title} />
-}
+})
 
 const SELECT_CLS =
   'rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 ' +
@@ -160,14 +161,14 @@ const SELECT_CLS =
   'transition-colors hover:border-slate-300 cursor-pointer'
 
 // ── Avatar ────────────────────────────────────────────────────────────────────
-const Avatar = ({ name, size = 'md' }) => {
+const Avatar = memo(({ name, size = 'md' }) => {
   const sz = size === 'lg' ? 'h-14 w-14 text-lg' : size === 'sm' ? 'h-7 w-7 text-xs' : 'h-9 w-9 text-sm'
   return (
     <div className={`shrink-0 flex items-center justify-center rounded-full font-semibold ${sz} ${avatarColor(name)}`}>
       {initials(name)}
     </div>
   )
-}
+})
 
 // ── Stat Card ─────────────────────────────────────────────────────────────────
 const STAT_ICON_STYLES = {
@@ -176,7 +177,7 @@ const STAT_ICON_STYLES = {
   amber:   { num: 'text-amber-700',   ic: 'bg-amber-50 border-amber-100 text-amber-600'   },
   slate:   { num: 'text-slate-500',   ic: 'bg-slate-50 border-slate-200 text-slate-400'   },
 }
-const StatCard = ({ label, value, sub, icon: Icon, color = 'default' }) => {
+const StatCard = memo(({ label, value, sub, icon: Icon, color = 'default' }) => {
   const { num, ic } = STAT_ICON_STYLES[color] ?? STAT_ICON_STYLES.default
   return (
     <div className="rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 sm:flex-1 sm:min-w-[120px]">
@@ -192,10 +193,10 @@ const StatCard = ({ label, value, sub, icon: Icon, color = 'default' }) => {
       </div>
     </div>
   )
-}
+})
 
 // ── Filter Bar ────────────────────────────────────────────────────────────────
-const FilterBar = ({ filters, onChange, onReset, hasActive }) => {
+const FilterBar = memo(({ filters, onChange, onReset, hasActive }) => {
   const [sheetOpen, setSheetOpen] = useState(false)
 
   const activeCount = [
@@ -483,7 +484,7 @@ const FilterBar = ({ filters, onChange, onReset, hasActive }) => {
       )}
     </>
   )
-}
+})
 
 // ── Action Required Bar ───────────────────────────────────────────────────────
 const ActionBar = ({ incomplete, pendingRentCount, onIncompleteClick, onPendingRentClick }) => {
@@ -4923,7 +4924,10 @@ const Tenants = () => {
   const propertyId = selectedProperty?._id ?? ''
   const toast = useToast()
   const enabledPayMethods = useMemo(() => loadEnabledMethods(propertyId), [propertyId])
-  const filteredQpMethods = PAYMENT_METHODS.filter(([v]) => enabledPayMethods.includes(v))
+  const filteredQpMethods = useMemo(
+    () => PAYMENT_METHODS.filter(([v]) => enabledPayMethods.includes(v)),
+    [enabledPayMethods]
+  )
 
   const PAGE_SIZE = 10
 
@@ -4931,8 +4935,10 @@ const Tenants = () => {
   const [profile,   setProfile]   = useState(null)
   const [saving,    setSaving]    = useState(false)
   const [filters,   setFilters]   = useState(FILTER_DEFAULTS)
-  const [selected,  setSelected]  = useState(new Set())
-  const [page,      setPage]      = useState(1)
+  const [selected,          setSelected]          = useState(new Set())
+  const [page,              setPage]              = useState(1)
+  const [vacateConfirmId,   setVacateConfirmId]   = useState(null)
+  const [bulkVacateConfirm, setBulkVacateConfirm] = useState(false)
 
   // Quick-pay modal: { tenant, amount, method, busy }
   const [quickPay,    setQuickPay]    = useState(null)
@@ -4942,14 +4948,14 @@ const Tenants = () => {
   const [qpNotes,     setQpNotes]     = useState('')
   const [qpBusy,      setQpBusy]      = useState(false)
 
-  const openQuickPay = (t) => {
+  const openQuickPay = useCallback((t) => {
     const pending = t.ledgerBalance > 0 ? t.ledgerBalance : 0
     setQpAmt(String(pending || ''))
     setQpMethod(filteredQpMethods[0]?.[0] ?? 'cash')
     setQpRef('')
     setQpNotes('')
     setQuickPay(t)
-  }
+  }, [filteredQpMethods])
 
   const handleQuickPay = async () => {
     const amt = Number(qpAmt)
@@ -5084,10 +5090,15 @@ const Tenants = () => {
   const clearSelection = () => setSelected(new Set())
 
   // Bulk: vacate selected (active/notice only)
-  const handleBulkVacate = async () => {
+  const handleBulkVacate = () => {
     const targets = filtered.filter(t => selected.has(t._id) && t.status !== 'vacated')
     if (!targets.length) return
-    if (!confirm(`Vacate ${targets.length} tenant${targets.length > 1 ? 's' : ''}? This will free their beds.`)) return
+    setBulkVacateConfirm(true)
+  }
+
+  const confirmBulkVacate = async () => {
+    const targets = filtered.filter(t => selected.has(t._id) && t.status !== 'vacated')
+    setBulkVacateConfirm(false)
     await Promise.allSettled(targets.map(t => vacateTenant(propertyId, t._id)))
     clearSelection()
     refetch()
@@ -5164,10 +5175,14 @@ const Tenants = () => {
     } finally { setSaving(false) }
   }
 
-  const handleVacate = async (id) => {
-    if (!confirm('Mark this tenant as vacated? This will also free their bed.')) return
+  const handleVacate = (id) => {
+    setVacateConfirmId(id)
+  }
+
+  const confirmVacate = async () => {
     try {
-      await vacateTenant(propertyId, id)
+      await vacateTenant(propertyId, vacateConfirmId)
+      setVacateConfirmId(null)
       setProfile(null)
       refetch()
     } catch (err) { toast(err.response?.data?.message || 'Failed to vacate tenant', 'error') }
@@ -5191,8 +5206,10 @@ const Tenants = () => {
   const allSelected = filtered.length > 0 && selected.size === filtered.length
   const someSelected = selected.size > 0
 
+  if (loading) return <TenantsSkeleton />
+
   return (
-    <div className="space-y-5 max-w-7xl">
+    <div className="space-y-3 sm:space-y-5 max-w-7xl">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between gap-3">
@@ -5212,8 +5229,6 @@ const Tenants = () => {
 
       {!propertyId ? (
         <NoPropertyState />
-      ) : loading ? (
-        <div className="flex justify-center py-20"><Spinner /></div>
       ) : (
         <>
           {/* ── Stat Cards ── */}
@@ -5453,6 +5468,30 @@ const Tenants = () => {
             }}
           />
         </Drawer>
+      )}
+
+      {vacateConfirmId && (
+        <Modal title="Vacate Tenant" onClose={() => setVacateConfirmId(null)} size="sm" zIndex="z-[70]">
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">This will mark the tenant as vacated and free their bed. This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button className="btn-secondary" onClick={() => setVacateConfirmId(null)}>Cancel</button>
+              <button className="btn-danger" onClick={confirmVacate}>Vacate</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {bulkVacateConfirm && (
+        <Modal title="Vacate Selected Tenants" onClose={() => setBulkVacateConfirm(false)} size="sm" zIndex="z-[70]">
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">This will vacate all selected tenants and free their beds. This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button className="btn-secondary" onClick={() => setBulkVacateConfirm(false)}>Cancel</button>
+              <button className="btn-danger" onClick={confirmBulkVacate}>Vacate All</button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )

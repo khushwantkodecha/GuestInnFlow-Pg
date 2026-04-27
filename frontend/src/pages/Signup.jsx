@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Building2, Eye, EyeOff, CheckCircle2, ArrowRight,
-  Shield, Lock,
+  Shield,
   User, Mail, Phone, KeyRound, Clock,
 } from 'lucide-react'
 import { signup } from '../api/auth'
@@ -181,8 +181,20 @@ const Signup = () => {
                   <div className="mt-5 w-full rounded-xl bg-amber-50 border border-amber-200 px-4 py-3.5 text-left">
                     <p className="text-[11px] font-bold uppercase tracking-wider text-amber-600 mb-1">Next step</p>
                     <p className="text-sm text-amber-700 leading-relaxed">
-                      Reach out to your administrator and share your registered email or mobile number to get your account activated.
+                      Reach out to us and share your registered email or mobile number to get your account activated.
                     </p>
+                    <div className="mt-3 space-y-2">
+                      <a href="tel:+919784292551"
+                        className="flex items-center gap-2.5 rounded-lg bg-white border border-amber-200 px-3 py-2 hover:bg-amber-50 transition-colors">
+                        <span className="text-base">📞</span>
+                        <span className="text-sm font-semibold text-amber-800">+91 97842 92551</span>
+                      </a>
+                      <a href="mailto:support.dorxaxis@gmail.com"
+                        className="flex items-center gap-2.5 rounded-lg bg-white border border-amber-200 px-3 py-2 hover:bg-amber-50 transition-colors">
+                        <span className="text-base">✉️</span>
+                        <span className="text-sm font-semibold text-amber-800">support.dorxaxis@gmail.com</span>
+                      </a>
+                    </div>
                   </div>
                   <Link to="/login" className="mt-5 text-sm font-semibold" style={{ color: '#45a793' }}>
                     Back to sign in

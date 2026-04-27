@@ -10,6 +10,7 @@ const Payment    = require('../models/Payment');
 const PlanConfig = require('../models/PlanConfig');
 const PLANS      = require('../config/plans');
 const asyncHandler = require('../utils/asyncHandler');
+const { sendAccountActivatedEmail } = require('../services/emailService');
 
 const signToken = (id) =>
   jwt.sign({ id, role: 'superadmin' }, process.env.JWT_SECRET, {
@@ -292,6 +293,11 @@ const toggleOwnerStatus = asyncHandler(async (req, res) => {
 
   // Also deactivate / reactivate all their properties
   await Property.updateMany({ owner: user._id }, { isActive: active });
+
+  // Notify user when their account is activated
+  if (active) {
+    sendAccountActivatedEmail({ name: user.name, email: user.email }).catch(() => {});
+  }
 
   res.json({ success: true, data: user });
 });

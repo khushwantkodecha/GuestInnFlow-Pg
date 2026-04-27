@@ -13,6 +13,13 @@ const { recalculateRoomRent } = require('../utils/recalculateRoomRent');
 const { calculateRent }       = require('../../shared/calculateRent');
 const rentService             = require('../services/rentService');
 const { vacateBedCore }       = require('../services/vacateService');
+const {
+  sendTenantWelcomeEmail,
+  sendReservationConfirmEmail,
+  sendReservationCancelledEmail,
+  sendCheckoutEmail,
+  sendRoomTransferEmail,
+} = require('../services/emailService');
 
 // ── Minimal structured logger ────────────────────────────────────────────────
 const logger = {
@@ -80,13 +87,14 @@ const getBeds = asyncHandler(async (req, res) => {
 
 // GET /api/properties/:propertyId/rooms/:roomId/beds/:id
 const getBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId })
+      .populate('tenant', 'name phone status checkInDate rentAmount billingSnapshot'),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId })
-    .populate('tenant', 'name phone status checkInDate rentAmount billingSnapshot');
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }
@@ -233,12 +241,13 @@ const createExtraBed = asyncHandler(async (req, res) => {
 // Update isChargeable / extraCharge on an existing extra bed.
 // Triggers rent recalculation so the assigned tenant's rentAmount stays in sync.
 const updateExtraBedSettings = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true }),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true });
   if (!bed) return res.status(404).json({ success: false, message: 'Bed not found' });
   if (!bed.isExtra) {
     return res.status(400).json({ success: false, message: 'This bed is not an extra bed' });
@@ -407,12 +416,13 @@ const updateBed = asyncHandler(async (req, res) => {
 
 // DELETE /api/properties/:propertyId/rooms/:roomId/beds/:id  — soft delete
 const deleteBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId }),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found', code: 'ROOM_NOT_FOUND' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId });
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found', code: 'BED_NOT_FOUND' });
   }
@@ -500,16 +510,17 @@ const deleteBed = asyncHandler(async (req, res) => {
 // depositCollected (default: true) — when false, deposit amount is saved on the tenant
 // as an expected/pending deposit but NOT marked as paid (no ledger entry written).
 const assignBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
-  if (!room) {
-    return res.status(404).json({ success: false, message: 'Room not found' });
-  }
-
   let { tenantId, rentOverride, deposit, depositCollected, moveInDate, advanceDisposition } = req.body;
   // advanceDisposition: 'adjust' (default) | 'convert_deposit' | 'keep'
   // Only relevant when bed is reserved and has a reservation advance > 0.
 
-  const bed = await fetchBed(req.params.id, req.params.roomId);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    fetchBed(req.params.id, req.params.roomId),
+  ]);
+  if (!room) {
+    return res.status(404).json({ success: false, message: 'Room not found' });
+  }
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }
@@ -899,16 +910,38 @@ const assignBed = asyncHandler(async (req, res) => {
     logger.warn('bed.assign.first_cycle_failed', { traceId, tenantId: tenant._id, error: cycleErr.message });
   }
 
+  // Non-blocking — failure must not affect the assignment response
+  const freshTenant = await Tenant.findById(tenantId).select('name email phone checkInDate billingStartDate rentAmount depositAmount depositStatus').lean();
+  if (freshTenant?.email) {
+    sendTenantWelcomeEmail({
+      name:             freshTenant.name,
+      email:            freshTenant.email,
+      phone:            freshTenant.phone,
+      roomNumber:       room.roomNumber,
+      floor:            room.floor,
+      roomType:         room.type,
+      bedNumber:        updatedBed?.bedNumber,
+      isExtra:          updatedBed?.isExtra ?? false,
+      rentAmount:       freshTenant.rentAmount,
+      rentType:         room.rentType,
+      checkInDate:      freshTenant.checkInDate,
+      billingStartDate: freshTenant.billingStartDate,
+      depositAmount:    freshTenant.depositAmount,
+      depositStatus:    freshTenant.depositStatus,
+    }).catch(() => {});
+  }
+
   res.json({ success: true, message: 'Tenant assigned to bed', data: updatedBed });
 });
 
 // GET /api/properties/:propertyId/rooms/:roomId/beds/:id/vacate-check
 // Returns pending rent summary + deposit info before the user confirms vacate.
 const vacateCheck = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    fetchBed(req.params.id, req.params.roomId),
+  ]);
   if (!room) return res.status(404).json({ success: false, message: 'Room not found' });
-
-  const bed = await fetchBed(req.params.id, req.params.roomId);
   if (!bed) return res.status(404).json({ success: false, message: 'Bed not found' });
 
   if (bed.status !== 'occupied' || !bed.tenant) {
@@ -983,12 +1016,13 @@ const vacateCheck = asyncHandler(async (req, res) => {
 
 // PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/vacate
 const vacateBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    fetchBed(req.params.id, req.params.roomId),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await fetchBed(req.params.id, req.params.roomId);
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }
@@ -1028,6 +1062,19 @@ const vacateBed = asyncHandler(async (req, res) => {
       userId: req.user._id,
     });
 
+    if (tenant.email) {
+      sendCheckoutEmail({
+        name:          result.tenant.name,
+        email:         tenant.email,
+        roomNumber:    room.roomNumber,
+        bedNumber:     result.bed.bedNumber,
+        checkOutDate:  result.tenant.checkOutDate,
+        depositAmount: result.tenant.depositBalance ?? tenant.depositAmount ?? 0,
+        depositStatus: result.tenant.depositStatus,
+        depositBalance: result.tenant.depositBalance ?? 0,
+      }).catch(() => {});
+    }
+
     res.json({
       success: true,
       message: 'Bed vacated successfully',
@@ -1053,12 +1100,13 @@ const vacateBed = asyncHandler(async (req, res) => {
 
 // PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/reserve
 const reserveBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true }),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true });
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }
@@ -1347,17 +1395,33 @@ const reserveBed = asyncHandler(async (req, res) => {
     userId:            req.user._id,
   });
 
+  if (tenant.email) {
+    sendReservationConfirmEmail({
+      name:          tenant.name,
+      email:         tenant.email,
+      roomNumber:    room.roomNumber,
+      floor:         room.floor,
+      bedNumber:     bed.bedNumber,
+      reservedTill:  reservedTillDate,
+      moveInDate:    moveInDate || null,
+      advanceAmount: advAmt,
+      advanceMode:   advMode,
+      expectedRent:  expectedRent > 0 ? expectedRent : null,
+    }).catch(() => {});
+  }
+
   res.json({ success: true, message: 'Bed reserved', data: bed });
 });
 
 // PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/unreserve
 const cancelReservation = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true }),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true });
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }
@@ -1461,17 +1525,34 @@ const cancelReservation = asyncHandler(async (req, res) => {
       ? 'Reservation cancelled — advance forfeited'
       : 'Reservation cancelled';
 
+  // Notify tenant
+  if (cancelTenantId) {
+    const cancelledTenant = await Tenant.findById(cancelTenantId).select('name email phone').lean();
+    if (cancelledTenant?.email) {
+      const advanceOutcome = convertToCredit ? 'credit' : forfeit ? 'forfeit' : 'refund';
+      sendReservationCancelledEmail({
+        name:          cancelledTenant.name,
+        email:         cancelledTenant.email,
+        roomNumber:    room.roomNumber,
+        bedNumber:     bed.bedNumber,
+        advanceAmount: cancelAdvAmt,
+        advanceOutcome,
+      }).catch(() => {});
+    }
+  }
+
   res.json({ success: true, message: cancelMsg, data: bed });
 });
 
 // PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/block
 const blockBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true }),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true });
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }
@@ -1536,12 +1617,13 @@ const blockBed = asyncHandler(async (req, res) => {
 
 // PATCH /api/properties/:propertyId/rooms/:roomId/beds/:id/unblock
 const unblockBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true }),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true });
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }
@@ -1728,18 +1810,19 @@ const getRoomActivity = asyncHandler(async (req, res) => {
 // Body: { targetBedId }
 // Atomically moves a tenant from the current occupied bed to a different vacant bed.
 const changeBed = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
-  if (!room) {
-    return res.status(404).json({ success: false, message: 'Room not found' });
-  }
-
   const { targetBedId } = req.body;
   if (!targetBedId) {
     return res.status(400).json({ success: false, message: 'targetBedId is required', code: 'MISSING_FIELD' });
   }
 
+  const [room, sourceBed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    fetchBed(req.params.id, req.params.roomId),
+  ]);
+  if (!room) {
+    return res.status(404).json({ success: false, message: 'Room not found' });
+  }
   // ── Source bed ───────────────────────────────────────────────────────────────
-  const sourceBed = await fetchBed(req.params.id, req.params.roomId);
   if (!sourceBed) {
     return res.status(404).json({ success: false, message: 'Source bed not found', code: 'BED_NOT_FOUND' });
   }
@@ -2033,6 +2116,20 @@ const changeBed = asyncHandler(async (req, res) => {
     userId:       req.user._id,
   });
 
+  if (tenant.email) {
+    sendRoomTransferEmail({
+      name:         tenant.name,
+      email:        tenant.email,
+      fromRoom:     room.roomNumber,
+      fromBed:      sourceBed.bedNumber,
+      toRoom:       targetRoom.roomNumber,
+      toBed:        targetBed.bedNumber,
+      newRent:      updatedTargetBed?.tenant?.rentAmount ?? 0,
+      rentType:     targetRoom.rentType,
+      transferDate: new Date(),
+    }).catch(() => {});
+  }
+
   res.json({
     success: true,
     message: 'Tenant moved to new bed successfully',
@@ -2146,12 +2243,13 @@ const bulkVacateBeds = asyncHandler(async (req, res) => {
 // Returns estimated rent for the given bed assuming one more tenant is added.
 // Read-only — does NOT modify any data.
 const rentPreview = asyncHandler(async (req, res) => {
-  const room = await verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id);
+  const [room, bed] = await Promise.all([
+    verifyRoomOwnership(req.params.roomId, req.params.propertyId, req.user._id),
+    Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true }),
+  ]);
   if (!room) {
     return res.status(404).json({ success: false, message: 'Room not found' });
   }
-
-  const bed = await Bed.findOne({ _id: req.params.id, room: req.params.roomId, isActive: true });
   if (!bed) {
     return res.status(404).json({ success: false, message: 'Bed not found' });
   }

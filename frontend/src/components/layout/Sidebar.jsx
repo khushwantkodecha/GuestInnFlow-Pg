@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback, memo } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import DormAxisIcon from '../ui/DormAxisIcon'
 import {
@@ -29,7 +29,7 @@ const MENU_ITEMS = [
 ]
 
 // ── Dropdown items ────────────────────────────────────────────────────────────
-const DropdownItems = ({ selectedProperty, properties, setSelectedProperty, setOpen }) => (
+const DropdownItems = memo(({ selectedProperty, properties, setSelectedProperty, setOpen }) => (
   <>
     {properties.map((p) => {
       const active = selectedProperty?._id === p._id
@@ -48,10 +48,10 @@ const DropdownItems = ({ selectedProperty, properties, setSelectedProperty, setO
       )
     })}
   </>
-)
+))
 
 // ── Property Selector ─────────────────────────────────────────────────────────
-const PropertySelector = ({ collapsed }) => {
+const PropertySelector = memo(({ collapsed }) => {
   const { properties, selectedProperty, setSelectedProperty } = useProperty()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
@@ -131,16 +131,16 @@ const PropertySelector = ({ collapsed }) => {
       )}
     </div>
   )
-}
+})
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
-const Sidebar = ({ open, onClose, collapsed, onToggleCollapse }) => {
+const Sidebar = memo(({ open, onClose, collapsed, onToggleCollapse }) => {
   const { logout } = useAuth()
   const navigate = useNavigate()
 
   const [confirmSignOut, setConfirmSignOut] = useState(false)
-  const handleLogout   = () => { logout(); navigate('/login') }
-  const handleNavClick = () => { if (onClose) onClose() }
+  const handleLogout   = useCallback(() => { logout(); navigate('/login') }, [logout, navigate])
+  const handleNavClick = useCallback(() => { if (onClose) onClose() }, [onClose])
 
 
   return (
@@ -440,6 +440,6 @@ const Sidebar = ({ open, onClose, collapsed, onToggleCollapse }) => {
       `}</style>
     </>
   )
-}
+})
 
 export default Sidebar

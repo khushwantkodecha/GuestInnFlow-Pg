@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4caf93"/>
+      <stop offset="100%" stop-color="#3a9b7c"/>
+    </linearGradient>
+  </defs>
+  <rect width="180" height="180" fill="url(#bg)"/>
+  <!-- Building body -->
+  <rect x="50" y="82" width="80" height="64" rx="4" fill="white"/>
+  <!-- Roof -->
+  <polygon points="90,38 40,88 140,88" fill="white" opacity="0.88"/>
+  <!-- Door -->
+  <rect x="76" y="112" width="28" height="34" rx="3" fill="#3a9b7c"/>
+  <!-- Window left -->
+  <rect x="56" y="94" width="18" height="16" rx="2" fill="#3a9b7c"/>
+  <!-- Window right -->
+  <rect x="106" y="94" width="18" height="16" rx="2" fill="#3a9b7c"/>
+</svg>

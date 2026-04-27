@@ -6,6 +6,13 @@ import { ToastProvider } from './context/ToastContext'
 import { CommandPaletteProvider } from './context/CommandPaletteContext'
 import AppLayout from './components/layout/AppLayout'
 import Spinner from './components/ui/Spinner'
+import {
+  PropertiesSkeleton,
+  RoomsBedsSkeleton,
+  TenantsSkeleton,
+  RentSkeleton,
+  SettingsSkeleton,
+} from './components/ui/Skeleton'
 
 // Eagerly load lightweight / above-the-fold pages
 import Landing    from './pages/Landing'
@@ -18,12 +25,8 @@ const Properties = lazy(() => import('./pages/Properties'))
 const RoomsBeds  = lazy(() => import('./pages/RoomsBeds'))
 const Tenants    = lazy(() => import('./pages/Tenants'))
 const Rent       = lazy(() => import('./pages/Rent'))
-const Expenses    = lazy(() => import('./pages/Expenses'))
-const Accounting  = lazy(() => import('./pages/Accounting'))
 const Reports    = lazy(() => import('./pages/Reports'))
 const Settings   = lazy(() => import('./pages/Settings'))
-const Invoices   = lazy(() => import('./pages/Invoices'))
-const Billing    = lazy(() => import('./pages/Billing'))
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth()
@@ -45,16 +48,12 @@ const AppRoutes = () => (
       }
     >
       <Route path="/dashboard"   element={<Dashboard />} />
-      <Route path="/properties"  element={<Suspense fallback={<Spinner />}><Properties /></Suspense>} />
-      <Route path="/rooms"       element={<Suspense fallback={<Spinner />}><RoomsBeds /></Suspense>} />
-      <Route path="/tenants"     element={<Suspense fallback={<Spinner />}><Tenants /></Suspense>} />
-      <Route path="/rent"        element={<Suspense fallback={<Spinner />}><Rent /></Suspense>} />
-      <Route path="/expenses"    element={<Suspense fallback={<Spinner />}><Expenses /></Suspense>} />
-      <Route path="/accounting" element={<Suspense fallback={<Spinner />}><Accounting /></Suspense>} />
-      <Route path="/invoices"   element={<Suspense fallback={<Spinner />}><Invoices /></Suspense>} />
-      <Route path="/billing"    element={<Suspense fallback={<Spinner />}><Billing /></Suspense>} />
+      <Route path="/properties"  element={<Suspense fallback={<PropertiesSkeleton />}><Properties /></Suspense>} />
+      <Route path="/rooms"       element={<Suspense fallback={<RoomsBedsSkeleton />}><RoomsBeds /></Suspense>} />
+      <Route path="/tenants"     element={<Suspense fallback={<TenantsSkeleton />}><Tenants /></Suspense>} />
+      <Route path="/rent"        element={<Suspense fallback={<RentSkeleton />}><Rent /></Suspense>} />
       <Route path="/reports"     element={<Suspense fallback={<Spinner />}><Reports /></Suspense>} />
-      <Route path="/settings"    element={<Suspense fallback={<Spinner />}><Settings /></Suspense>} />
+      <Route path="/settings"    element={<Suspense fallback={<SettingsSkeleton />}><Settings /></Suspense>} />
     </Route>
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>

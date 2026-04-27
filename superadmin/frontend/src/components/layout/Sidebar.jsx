@@ -18,14 +18,15 @@ const Sidebar = ({ collapsed, onToggleCollapse }) => {
   const navigate = useNavigate()
   const [confirmSignOut, setConfirmSignOut] = useState(false)
 
-  const handleLogout = () => { logout(); navigate('/login') }
+  const handleLogout  = () => { logout(); navigate('/login') }
 
   const initials = admin?.name?.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || 'S'
 
   return (
     <>
       <aside className={`
-        fixed inset-y-0 left-0 z-30 flex flex-col sb-root
+        hidden md:flex flex-col sb-root
+        fixed inset-y-0 left-0 z-30
         transition-all duration-300 ease-in-out
         ${collapsed ? 'w-[68px]' : 'w-60'}
       `}>
@@ -35,16 +36,14 @@ const Sidebar = ({ collapsed, onToggleCollapse }) => {
           <div className="sb-logo-icon shrink-0">
             <ShieldCheck size={15} style={{ color: '#60C3AD' }} />
           </div>
-          {!collapsed && (
-            <div className="ml-3">
-              <p className="text-[14px] font-bold tracking-tight leading-none" style={{ color: '#334155' }}>
-                DormAxis
-              </p>
-              <p className="text-[9px] font-semibold uppercase tracking-widest leading-tight mt-0.5 text-slate-400">
-                Superadmin
-              </p>
-            </div>
-          )}
+          <div className={`ml-3 ${collapsed ? 'hidden' : ''}`}>
+            <p className="text-[14px] font-bold tracking-tight leading-none" style={{ color: '#334155' }}>
+              DormAxis
+            </p>
+            <p className="text-[9px] font-semibold uppercase tracking-widest leading-tight mt-0.5 text-slate-400">
+              Superadmin
+            </p>
+          </div>
         </div>
 
         {/* ── Collapse toggle ── */}
@@ -73,9 +72,7 @@ const Sidebar = ({ collapsed, onToggleCollapse }) => {
                     <span className={`sb-nav-icon-wrap ${isActive ? 'sb-nav-icon-wrap--active' : ''}`}>
                       <Icon size={16} />
                     </span>
-                    {!collapsed && (
-                      <span className="truncate text-[13px] font-medium">{label}</span>
-                    )}
+                    <span className={`truncate text-[13px] font-medium ${collapsed ? 'hidden' : ''}`}>{label}</span>
                   </>
                 )}
               </NavLink>
@@ -85,15 +82,13 @@ const Sidebar = ({ collapsed, onToggleCollapse }) => {
 
         {/* ── Footer ── */}
         <div className={`sb-divider-t ${collapsed ? 'px-2 py-3 flex justify-center' : 'px-3 py-3'}`}>
-          {!collapsed && (
-            <div className="sb-user-card mb-2">
-              <div className="sb-avatar">{initials}</div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[12px] font-semibold text-slate-700 truncate leading-none">{admin?.name || 'Superadmin'}</p>
-                <p className="text-[10.5px] text-slate-400 truncate mt-0.5">{admin?.email}</p>
-              </div>
+          <div className={`sb-user-card mb-2 ${collapsed ? 'hidden' : ''}`}>
+            <div className="sb-avatar">{initials}</div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] font-semibold text-slate-700 truncate leading-none">{admin?.name || 'Superadmin'}</p>
+              <p className="text-[10.5px] text-slate-400 truncate mt-0.5">{admin?.email}</p>
             </div>
-          )}
+          </div>
           {collapsed ? (
             <button onClick={() => setConfirmSignOut(true)} className="sb-icon-btn" title="Sign out">
               <LogOut size={14} />

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback, memo } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, BedDouble, Users, CreditCard,
@@ -72,14 +72,14 @@ const SheetPropertySelector = () => {
 }
 
 // ── BottomNav ─────────────────────────────────────────────────────────────────
-const BottomNav = () => {
+const BottomNav = memo(() => {
   const [moreOpen,       setMoreOpen]       = useState(false)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const { logout } = useAuth()
   const navigate   = useNavigate()
 
-  const closeMore    = () => setMoreOpen(false)
-  const handleLogout = () => { logout(); navigate('/login') }
+  const closeMore    = useCallback(() => setMoreOpen(false), [])
+  const handleLogout = useCallback(() => { logout(); navigate('/login') }, [logout, navigate])
 
   return (
     <>
@@ -260,6 +260,6 @@ const BottomNav = () => {
       `}</style>
     </>
   )
-}
+})
 
 export default BottomNav

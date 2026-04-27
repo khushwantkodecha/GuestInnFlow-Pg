@@ -13,9 +13,13 @@ import { useAuth } from '../context/AuthContext'
 const ERROR_MAP = {
   ACCOUNT_INACTIVE: {
     title: 'Account not activated',
-    body:  'Contact the product owner to enable your account.',
+    body:  'Contact us with your registered email or mobile number to get activated.',
     bg: '#fffbeb', border: '#fde68a', title_color: '#92400e', body_color: '#b45309', icon_color: '#d97706',
     Icon: AlertCircle,
+    contacts: [
+      { href: 'tel:+919784292551',              label: '+91 97842 92551' },
+      { href: 'mailto:support.dorxaxis@gmail.com', label: 'support.dorxaxis@gmail.com' },
+    ],
   },
   EMAIL_NOT_FOUND: {
     title: 'Email not found',
@@ -49,9 +53,20 @@ const LoginErrorBanner = ({ code, msg }) => {
     <div className="mb-5 flex items-start gap-3 rounded-xl border px-4 py-3.5 animate-pageIn"
       style={{ background: cfg.bg, borderColor: cfg.border }}>
       <Icon size={16} className="mt-0.5 shrink-0" style={{ color: cfg.icon_color }} />
-      <div>
+      <div className="w-full">
         <p className="text-sm font-semibold" style={{ color: cfg.title_color }}>{cfg.title}</p>
         <p className="text-xs mt-0.5 leading-relaxed" style={{ color: cfg.body_color }}>{cfg.body}</p>
+        {cfg.contacts && (
+          <div className="mt-2.5 space-y-1.5">
+            {cfg.contacts.map(c => (
+              <a key={c.href} href={c.href}
+                className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors hover:opacity-80"
+                style={{ background: '#fff', borderColor: '#fde68a', color: '#92400e' }}>
+                {c.href.startsWith('tel') ? '📞' : '✉️'} {c.label}
+              </a>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -18,7 +18,7 @@ import {
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
 import { useToast } from '../context/ToastContext'
-import { PropertyCardSkeleton, StatsSkeleton } from '../components/ui/Skeleton'
+import { StatsSkeleton, PropertiesSkeleton } from '../components/ui/Skeleton'
 import Modal from '../components/ui/Modal'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1161,6 +1161,8 @@ const Properties = () => {
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
+  if (loading) return <PropertiesSkeleton />
+
   return (
     <div className="space-y-5 max-w-6xl">
 
@@ -1182,7 +1184,7 @@ const Properties = () => {
       </div>
 
       {/* ── Portfolio KPI Bar ── */}
-      {!loading && activeCount > 0 && (
+      {activeCount > 0 && (
         statsLoading ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[0,1,2,3].map(i => (
@@ -1222,7 +1224,7 @@ const Properties = () => {
       )}
 
       {/* ── Search + Filters ── */}
-      {!loading && properties.length > 0 && (
+      {properties.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           {/* Search */}
           <div className="relative flex-1 min-w-[180px]">
@@ -1264,11 +1266,7 @@ const Properties = () => {
       )}
 
       {/* ── Grid ── */}
-      {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[0, 1, 2].map((i) => <PropertyCardSkeleton key={i} />)}
-        </div>
-      ) : properties.length === 0 ? (
+      {properties.length === 0 ? (
         <div className="flex items-center justify-center py-10">
           <div className="w-full max-w-2xl">
 

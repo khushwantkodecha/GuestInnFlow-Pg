@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react'
 import { getProperties } from '../api/properties'
 import { useAuth } from './AuthContext'
 
@@ -34,12 +34,12 @@ export const PropertyProvider = ({ children }) => {
       .finally(() => setLoading(false))
   }, [user])
 
-  const setSelectedProperty = (property) => {
+  const setSelectedProperty = useCallback((property) => {
     _setSelected(property)
     localStorage.setItem(STORAGE_KEY, property?._id ?? '')
-  }
+  }, [])
 
-  const refreshProperties = () => {
+  const refreshProperties = useCallback(() => {
     if (!user) return
     getProperties()
       .then((res) => {
@@ -57,16 +57,15 @@ export const PropertyProvider = ({ children }) => {
         })
       })
       .catch(() => {})
-  }
+  }, [user])
+
+  const value = useMemo(
+    () => ({ properties, selectedProperty, setSelectedProperty, refreshProperties, loading }),
+    [properties, selectedProperty, setSelectedProperty, refreshProperties, loading]
+  )
 
   return (
-    <PropertyContext.Provider value={{
-      properties,
-      selectedProperty,
-      setSelectedProperty,
-      refreshProperties,
-      loading,
-    }}>
+    <PropertyContext.Provider value={value}>
       {children}
     </PropertyContext.Provider>
   )

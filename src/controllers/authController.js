@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const asyncHandler = require('../utils/asyncHandler');
+const { sendSignupAlert, sendWelcomeEmail } = require('../services/emailService');
 
 const signToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -11,6 +12,10 @@ const signToken = (id) =>
 const register = asyncHandler(async (req, res) => {
   const { name, email, password, phone } = req.body;
   await User.create({ name, email, password, phone });
+
+  // Non-blocking — failure must not break signup
+  sendSignupAlert({ name, email, phone }).catch(() => {});
+  sendWelcomeEmail({ name, email, phone }).catch(() => {});
 
   res.status(201).json({
     success: true,

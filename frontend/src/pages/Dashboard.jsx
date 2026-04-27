@@ -716,7 +716,7 @@ const Dashboard = () => {
   const heading = d.property?.name ?? selectedProperty?.name ?? ''
 
   return (
-    <div className="space-y-5 max-w-6xl">
+    <div className="space-y-3 sm:space-y-5 max-w-6xl">
 
       {/* Greeting */}
       <div>
@@ -742,16 +742,16 @@ const Dashboard = () => {
       <AlertsSection financials={d.financials} beds={d.beds} navigate={navigate} />
 
       {/* Main two-column layout */}
-      <div className="grid gap-5 lg:grid-cols-5">
+      <div className="grid gap-3 sm:gap-5 lg:grid-cols-5">
 
         {/* Left — Financial + Activity */}
-        <div className="lg:col-span-3 space-y-5">
+        <div className="lg:col-span-3 space-y-3 sm:space-y-5">
           <FinancialSummaryCard financials={d.financials} period={period} navigate={navigate} />
           <RecentActivityCard activity={activity} loading={activityLoading} navigate={navigate} />
         </div>
 
         {/* Right — Occupancy + Tenants */}
-        <div className="lg:col-span-2 space-y-5">
+        <div className="lg:col-span-2 space-y-3 sm:space-y-5">
           <OccupancyCard beds={d.beds} />
           <TenantSummaryCard tenants={d.tenants} navigate={navigate} />
         </div>

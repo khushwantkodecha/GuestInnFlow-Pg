@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   CheckCircle2, Zap, AlertTriangle, TrendingUp,
@@ -15,10 +15,10 @@ import { TenantProfile } from './Tenants'
 import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
 import { useToast } from '../context/ToastContext'
-import Spinner from '../components/ui/Spinner'
 import EmptyState from '../components/ui/EmptyState'
 import Modal from '../components/ui/Modal'
 import Drawer from '../components/ui/Drawer'
+import { RentSkeleton } from '../components/ui/Skeleton'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt   = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
@@ -35,7 +35,7 @@ const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 const waLink = (phone = '') => `https://wa.me/${phone.replace(/[^\d]/g, '')}`
 
 // ── Status pill ───────────────────────────────────────────────────────────────
-const StatusPill = ({ status }) => {
+const StatusPill = memo(({ status }) => {
   const cfg = {
     paid:    'bg-emerald-50 text-emerald-700 border border-emerald-200',
     pending: 'bg-amber-50 text-amber-700 border border-amber-200',
@@ -51,10 +51,18 @@ const StatusPill = ({ status }) => {
       {status}
     </span>
   )
-}
+})
 
 // ── Summary Cards ─────────────────────────────────────────────────────────────
-const SummaryCards = ({ rents }) => {
+const RENT_STAT_STYLES = {
+  amber:   { num: 'text-amber-700',   ic: 'bg-amber-50 border-amber-100 text-amber-600'     },
+  orange:  { num: 'text-orange-700',  ic: 'bg-orange-50 border-orange-100 text-orange-600'  },
+  primary: { num: 'text-primary-700', ic: 'bg-primary-50 border-primary-100 text-primary-600' },
+  emerald: { num: 'text-emerald-700', ic: 'bg-emerald-50 border-emerald-100 text-emerald-600' },
+  dim:     { num: 'text-slate-300',   ic: 'bg-slate-50 border-slate-200 text-slate-300'     },
+}
+
+const SummaryCards = memo(({ rents }) => {
   const chargesMap = new Map()
   rents.forEach(r => {
     const tid = r.tenant?._id
@@ -73,65 +81,84 @@ const SummaryCards = ({ rents }) => {
   const overdueCount = rents.filter(r => r.status === 'overdue').length
   const rate         = expected > 0 ? Math.round((collected / expected) * 100) : 0
 
+  const cardBase = 'rounded-2xl bg-white border border-slate-200 px-4 py-3.5 flex items-center gap-3 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 sm:flex-1 sm:min-w-[130px]'
+
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:flex sm:gap-3 sm:overflow-x-auto sm:pb-1">
 
       {/* Rent Due */}
-      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
-        <div className="flex items-start justify-between mb-3">
-          <div className="h-8 w-8 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center shrink-0">
-            <IndianRupee size={14} className="text-amber-500" />
-          </div>
-          {overdueCount > 0 && (
-            <div className="flex items-center gap-1 rounded-full bg-red-50 border border-red-100 px-2 py-0.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />
-              <span className="text-[10px] font-bold text-red-600 leading-none">{overdueCount} overdue</span>
+      {(() => {
+        const s = rentDue > 0 ? RENT_STAT_STYLES.amber : RENT_STAT_STYLES.dim
+        return (
+          <div className={cardBase}>
+            <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${s.ic}`}>
+              <IndianRupee size={15} />
             </div>
-          )}
-        </div>
-        <p className={`text-2xl font-bold tabular-nums leading-none ${rentDue > 0 ? 'text-amber-700' : 'text-slate-200'}`}>{fmt(rentDue)}</p>
-        <p className="text-[11px] font-medium text-slate-400 mt-1.5">Rent Due</p>
-      </div>
+            <div className="min-w-0">
+              <p className={`text-[18px] font-bold leading-none tabular-nums ${s.num}`}>{fmt(rentDue)}</p>
+              {overdueCount > 0 && (
+                <p className="text-[10px] font-semibold text-red-500 mt-0.5 flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse inline-block shrink-0" />{overdueCount} overdue
+                </p>
+              )}
+              <p className="text-[10px] font-medium text-slate-400 mt-0.5">Rent Due</p>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Charges Due */}
-      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
-        <div className="h-8 w-8 rounded-xl bg-orange-50 border border-orange-100 flex items-center justify-center shrink-0 mb-3">
-          <AlertTriangle size={14} className="text-orange-500" />
-        </div>
-        <p className={`text-2xl font-bold tabular-nums leading-none ${chargesDue > 0 ? 'text-orange-600' : 'text-slate-200'}`}>{fmt(chargesDue)}</p>
-        <p className="text-[11px] font-medium text-slate-400 mt-1.5">Charges Due</p>
-      </div>
+      {(() => {
+        const s = chargesDue > 0 ? RENT_STAT_STYLES.orange : RENT_STAT_STYLES.dim
+        return (
+          <div className={cardBase}>
+            <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${s.ic}`}>
+              <AlertTriangle size={15} />
+            </div>
+            <div className="min-w-0">
+              <p className={`text-[18px] font-bold leading-none tabular-nums ${s.num}`}>{fmt(chargesDue)}</p>
+              <p className="text-[10px] font-medium text-slate-400 mt-0.5">Charges Due</p>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Outstanding */}
-      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
-        <div className="h-8 w-8 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center shrink-0 mb-3">
-          <CircleDollarSign size={14} className="text-primary-500" />
-        </div>
-        <p className={`text-2xl font-bold tabular-nums leading-none ${totalOutstanding > 0 ? 'text-primary-700' : 'text-slate-200'}`}>{fmt(totalOutstanding)}</p>
-        <p className="text-[11px] font-medium text-slate-400 mt-1.5">
-          {totalOutstanding === 0 ? 'All Settled' : 'Outstanding'}
-        </p>
-      </div>
+      {(() => {
+        const s = totalOutstanding > 0 ? RENT_STAT_STYLES.primary : RENT_STAT_STYLES.dim
+        return (
+          <div className={cardBase}>
+            <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${s.ic}`}>
+              <CircleDollarSign size={15} />
+            </div>
+            <div className="min-w-0">
+              <p className={`text-[18px] font-bold leading-none tabular-nums ${s.num}`}>{fmt(totalOutstanding)}</p>
+              <p className="text-[10px] font-medium text-slate-400 mt-0.5">{totalOutstanding === 0 ? 'All Settled' : 'Outstanding'}</p>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Collected */}
-      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-4 cursor-default hover:shadow-md hover:border-slate-300 transition-all duration-200">
-        <div className="flex items-start justify-between mb-3">
-          <div className="h-8 w-8 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
-            <CheckCircle2 size={14} className="text-emerald-500" />
-          </div>
-          <span className="text-sm font-bold text-emerald-600 tabular-nums">{rate}%</span>
+      <div className={cardBase}>
+        <div className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 ${RENT_STAT_STYLES.emerald.ic}`}>
+          <CheckCircle2 size={15} />
         </div>
-        <p className="text-2xl font-bold tabular-nums leading-none text-emerald-600">{fmt(collected)}</p>
-        <p className="text-[11px] font-medium text-slate-400 mt-1.5">Collected</p>
-        <div className="mt-2 h-1 rounded-full bg-slate-100 overflow-hidden">
-          <div className="h-full rounded-full bg-emerald-400 transition-all duration-700" style={{ width: `${rate}%` }} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-1.5">
+            <p className={`text-[18px] font-bold leading-none tabular-nums ${RENT_STAT_STYLES.emerald.num}`}>{fmt(collected)}</p>
+            <span className="text-[11px] font-bold text-emerald-600 tabular-nums">{rate}%</span>
+          </div>
+          <div className="mt-1 h-1 rounded-full bg-slate-100 overflow-hidden">
+            <div className="h-full rounded-full bg-emerald-400 transition-all duration-700" style={{ width: `${rate}%` }} />
+          </div>
+          <p className="text-[10px] font-medium text-slate-400 mt-0.5">Collected</p>
         </div>
       </div>
 
     </div>
   )
-}
-
+})
 
 // ── Tenant avatar helpers ─────────────────────────────────────────────────────
 const AVATAR_PALETTE = [
@@ -146,7 +173,7 @@ const tenantInitials    = (name = '') => name.trim().split(/\s+/).map(w => w[0])
 const tenantAvatarColor = (name = '') => AVATAR_PALETTE[(name.charCodeAt(0) || 0) % AVATAR_PALETTE.length]
 
 // ── Rent Row ──────────────────────────────────────────────────────────────────
-const RentRow = ({ rent: r, onMarkPaid, onLedger, onProfile, onAddCharge }) => {
+const RentRow = memo(({ rent: r, onMarkPaid, onLedger, onProfile, onAddCharge }) => {
   const isOverdue  = r.status === 'overdue'
   const isPending  = r.status === 'pending'
   const isPaid     = r.status === 'paid'
@@ -330,12 +357,13 @@ const RentRow = ({ rent: r, onMarkPaid, onLedger, onProfile, onAddCharge }) => {
       </td>
     </tr>
   )
-}
+})
 
 // ── Mobile rent card ─────────────────────────────────────────────────────────
-const RentCard = ({ rent: r, onMarkPaid, onLedger }) => {
+const RentCard = memo(({ rent: r, onMarkPaid, onLedger }) => {
   const isOverdue = r.status === 'overdue'
   const isPaid    = r.status === 'paid'
+  const isPartial = r.status === 'partial'
   const bed       = r.tenant?.bed
   const roomNum   = bed?.room?.roomNumber
   const bedNum    = bed?.bedNumber
@@ -344,7 +372,8 @@ const RentCard = ({ rent: r, onMarkPaid, onLedger }) => {
   const rentRemaining = r.amount - (r.paidAmount ?? 0)
   const charges   = r.chargesDue ?? 0
   const total     = isPaid ? r.amount : rentRemaining + charges
-  const hasDues   = !isPaid && (r.status === 'pending' || r.status === 'partial' || isOverdue)
+  const hasDues   = !isPaid && (r.status === 'pending' || isPartial || isOverdue)
+  const days      = isOverdue ? daysOverdue(r.dueDate) : 0
 
   return (
     <div
@@ -352,28 +381,39 @@ const RentCard = ({ rent: r, onMarkPaid, onLedger }) => {
       tabIndex={0}
       onClick={() => onLedger(r.tenant)}
       onKeyDown={e => e.key === 'Enter' && onLedger(r.tenant)}
-      className={`flex items-center gap-3 px-4 py-3.5 cursor-pointer touch-manipulation active:bg-slate-50 transition-colors ${
-        isOverdue ? 'border-l-[3px] border-l-red-400' : r.status === 'pending' || r.status === 'partial' ? 'border-l-[3px] border-l-amber-400' : 'border-l-[3px] border-l-transparent'
+      className={`flex items-center gap-3 px-4 py-3 cursor-pointer touch-manipulation active:bg-slate-50/80 transition-colors ${
+        isOverdue ? 'border-l-[3px] border-l-red-400 bg-red-50/20' : isPartial ? 'border-l-[3px] border-l-orange-400' : r.status === 'pending' ? 'border-l-[3px] border-l-amber-400' : 'border-l-[3px] border-l-transparent'
       }`}
     >
       <div className={`h-9 w-9 rounded-xl flex items-center justify-center text-[11px] font-bold shrink-0 ${avColor}`}>
         {avText}
       </div>
       <div className="flex-1 min-w-0">
-        <p className={`text-sm font-semibold truncate ${isOverdue ? 'text-red-600' : 'text-slate-800'}`}>
-          {r.tenant?.name ?? '—'}
-        </p>
+        <div className="flex items-center gap-1.5">
+          <p className={`text-sm font-semibold truncate ${isOverdue ? 'text-red-600' : 'text-slate-800'}`}>
+            {r.tenant?.name ?? '—'}
+          </p>
+          {r.tenant?.status === 'vacated' && (
+            <span className="text-[9px] font-bold uppercase tracking-wide bg-slate-100 text-slate-500 rounded-full px-1.5 py-0.5 leading-none shrink-0">Vacated</span>
+          )}
+        </div>
         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
           {roomNum && (
             <span className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
               <BedDouble size={9} /> R{roomNum}{bedNum ? `/B${bedNum}` : ''}
             </span>
           )}
-          {isOverdue && daysOverdue(r.dueDate) > 0 && (
-            <span className="text-[10px] font-semibold text-red-500">{daysOverdue(r.dueDate)}d overdue</span>
+          {isOverdue && days > 0 && (
+            <span className="text-[10px] font-semibold text-red-500">{days}d overdue</span>
+          )}
+          {isPartial && (r.paidAmount ?? 0) > 0 && (
+            <span className="text-[10px] text-amber-600 font-medium">{fmt(r.paidAmount)} paid</span>
           )}
           {isPaid && r.paymentDate && (
             <span className="text-[10px] text-slate-400">{fdate(r.paymentDate)}</span>
+          )}
+          {!isPaid && r.dueDate && !isOverdue && (
+            <span className="text-[10px] text-slate-400">Due {fdate(r.dueDate)}</span>
           )}
         </div>
       </div>
@@ -384,7 +424,7 @@ const RentCard = ({ rent: r, onMarkPaid, onLedger }) => {
         {hasDues ? (
           <button
             onClick={e => { e.stopPropagation(); onMarkPaid(r) }}
-            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-[10px] font-bold text-white ${isOverdue ? 'bg-red-500' : 'bg-primary-500'}`}
+            className={`inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-[11px] font-bold text-white shadow-sm ${isOverdue ? 'bg-red-500 active:bg-red-600' : 'bg-primary-500 active:bg-primary-600'}`}
           >
             <CheckCircle2 size={10} /> Collect
           </button>
@@ -394,7 +434,7 @@ const RentCard = ({ rent: r, onMarkPaid, onLedger }) => {
       </div>
     </div>
   )
-}
+})
 
 // ── Allocation Preview (pure computation, no side effects) ────────────────────
 const computeAllocation = (openRents, payingAmount) => {
@@ -1365,18 +1405,24 @@ const Rent = () => {
     }
   }
 
-  const onFilterTab = (key) => {
+  const onFilterTab = useCallback((key) => {
     setStatusFilter(key)
-  }
+  }, [])
 
-  const prevMonth = () => {
+  const prevMonth = useCallback(() => {
     if (month === 1) { setMonth(12); setYear(y => y - 1) }
     else setMonth(m => m - 1)
-  }
-  const nextMonth = () => {
+  }, [month])
+
+  const nextMonth = useCallback(() => {
     if (month === 12) { setMonth(1); setYear(y => y + 1) }
     else setMonth(m => m + 1)
-  }
+  }, [month])
+
+  const handleAddCharge = useCallback((t) => {
+    setQuickCharge(t)
+    setQcForm({ amount: '', description: '', date: new Date().toISOString().split('T')[0] })
+  }, [])
 
   const handleQuickCharge = async (e) => {
     e.preventDefault()
@@ -1443,10 +1489,13 @@ const Rent = () => {
     setTimeout(() => w.print(), 400)
   }
 
+  if (loading) return <RentSkeleton />
+
   return (
-    <div className="space-y-5 max-w-7xl">
+    <div className="space-y-3 sm:space-y-5 max-w-7xl">
 
       {/* ── Header ── */}
+      <>
 
       {/* Mobile header */}
       <div className="sm:hidden space-y-2">
@@ -1578,10 +1627,10 @@ const Rent = () => {
         </div>
       </div>
 
+      </>
+
       {!propertyId ? (
         <NoPropertyState />
-      ) : loading ? (
-        <div className="flex justify-center py-20"><Spinner /></div>
       ) : (
         <>
           {/* ── Summary Cards ── */}
@@ -1743,7 +1792,7 @@ const Rent = () => {
                         onMarkPaid={handleOpenPayModal}
                         onLedger={setLedgerTenant}
                         onProfile={setProfileTenant}
-                        onAddCharge={t => { setQuickCharge(t); setQcForm({ amount: '', description: '', date: new Date().toISOString().split('T')[0] }) }}
+                        onAddCharge={handleAddCharge}
                       />
                     ))}
                   </tbody>

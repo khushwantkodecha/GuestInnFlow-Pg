@@ -2,10 +2,6 @@ import api from './axios'
 
 export const getRents = (propertyId, params) =>
   api.get(`/properties/${propertyId}/rents`, { params })
-export const getPendingRents = (propertyId) =>
-  api.get(`/properties/${propertyId}/rents/pending`)
-export const getOverdueRents = (propertyId) =>
-  api.get(`/properties/${propertyId}/rents/overdue`)
 export const generateRent = (propertyId, data) =>
   api.post(`/properties/${propertyId}/rents/generate`, data)
 
@@ -25,8 +21,3 @@ export const addCharge = (propertyId, tenantId, data) =>
 // Reverse a previously recorded payment (creates a reversal LedgerEntry)
 export const reversePayment = (propertyId, paymentId, data) =>
   api.post(`/properties/${propertyId}/rents/payments/${paymentId}/reverse`, data)
-
-// Legacy — prefer recordPayment
-export const markRentPaid = (propertyId, rentId, data) =>
-  api.patch(`/properties/${propertyId}/rents/${rentId}/pay`, data)
-

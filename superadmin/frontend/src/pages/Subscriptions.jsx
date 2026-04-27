@@ -153,76 +153,133 @@ const EditModal = ({ plan, onClose, onSaved }) => {
 /* ── Plan row ────────────────────────────────────────────────────────────────── */
 const PlanRow = ({ plan, onEdit, isLast }) => {
   const style = PLAN_STYLES[plan.key]
+  const revenueStr = plan.annualRevenue > 0
+    ? `₹${plan.annualRevenue >= 100000 ? (plan.annualRevenue / 100000).toFixed(1) + 'L' : fmt(plan.annualRevenue)}`
+    : '—'
 
   return (
-    <div className={`flex items-center gap-4 px-5 py-4 hover:bg-slate-50/70 transition-colors group ${!isLast ? 'border-b border-slate-100' : ''}`}>
-
-      {/* Colour indicator */}
-      <div className="w-1 self-stretch rounded-full shrink-0" style={{ background: style.color, minHeight: 40 }} />
-
-      {/* Icon + name */}
-      <div className="flex items-center gap-3 w-40 shrink-0">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl shrink-0"
-          style={{ background: style.bg, border: `1.5px solid ${style.border}` }}>
-          <Layers size={16} style={{ color: style.color }} />
+    <>
+      {/* ── Mobile card (< sm) ── */}
+      <div className={`sm:hidden px-4 py-4 ${!isLast ? 'border-b border-slate-100' : ''}`}>
+        <div className="flex items-start justify-between gap-3">
+          {/* Left: icon + name */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl shrink-0"
+              style={{ background: style.bg, border: `1.5px solid ${style.border}` }}>
+              <Layers size={16} style={{ color: style.color }} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-slate-800 leading-tight truncate">{plan.name}</p>
+              <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                style={{ background: style.pill, color: style.pillText }}>
+                {plan.key}
+              </span>
+            </div>
+          </div>
+          {/* Right: price + edit */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="text-right">
+              <p className="text-base font-black text-slate-800 tabular-nums leading-none">₹{fmt(plan.price)}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">per year</p>
+            </div>
+            <button
+              onClick={() => onEdit(plan)}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-slate-300 hover:text-slate-700 hover:bg-slate-50 transition-all shrink-0"
+            >
+              <Pencil size={11} /> Edit
+            </button>
+          </div>
         </div>
-        <div>
-          <p className="text-sm font-bold text-slate-800 leading-tight">{plan.name}</p>
-          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-            style={{ background: style.pill, color: style.pillText }}>
-            {plan.key}
-          </span>
+
+        {/* Stats row */}
+        <div className="mt-3 flex items-center gap-4">
+          <div className="text-center">
+            <p className="text-sm font-bold text-slate-700">{plan.maxProperties === -1 ? '∞' : plan.maxProperties}</p>
+            <p className="text-[10px] text-slate-400">Max props</p>
+          </div>
+          <div className="w-px h-6 bg-slate-100" />
+          <div className="text-center">
+            <p className="text-sm font-bold text-slate-700">{plan.ownerCount}</p>
+            <p className="text-[10px] text-slate-400">Owners</p>
+          </div>
+          <div className="w-px h-6 bg-slate-100" />
+          <div>
+            <p className="text-sm font-bold tabular-nums" style={{ color: plan.annualRevenue > 0 ? '#10b981' : '#94a3b8' }}>
+              {revenueStr}
+            </p>
+            <p className="text-[10px] text-slate-400">Revenue / yr</p>
+          </div>
         </div>
+
+        {plan.description && (
+          <p className="mt-2 text-xs text-slate-400 leading-relaxed">{plan.description}</p>
+        )}
       </div>
 
-      {/* Description */}
-      <p className="flex-1 text-xs text-slate-400 leading-relaxed min-w-0 hidden md:block">
-        {plan.description || <span className="italic">No description</span>}
-      </p>
+      {/* ── Desktop row (≥ sm) ── */}
+      <div className={`hidden sm:flex items-center gap-4 px-5 py-4 hover:bg-slate-50/70 transition-colors group ${!isLast ? 'border-b border-slate-100' : ''}`}>
 
-      {/* Price */}
-      <div className="w-28 shrink-0 text-right">
-        <p className="text-base font-black text-slate-800 tabular-nums leading-none">
-          ₹{fmt(plan.price)}
+        {/* Colour indicator */}
+        <div className="w-1 self-stretch rounded-full shrink-0" style={{ background: style.color, minHeight: 40 }} />
+
+        {/* Icon + name */}
+        <div className="flex items-center gap-3 w-40 shrink-0">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl shrink-0"
+            style={{ background: style.bg, border: `1.5px solid ${style.border}` }}>
+            <Layers size={16} style={{ color: style.color }} />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-slate-800 leading-tight">{plan.name}</p>
+            <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+              style={{ background: style.pill, color: style.pillText }}>
+              {plan.key}
+            </span>
+          </div>
+        </div>
+
+        {/* Description */}
+        <p className="flex-1 text-xs text-slate-400 leading-relaxed min-w-0 hidden md:block">
+          {plan.description || <span className="italic">No description</span>}
         </p>
-        <p className="text-[10px] text-slate-400 mt-0.5">per year</p>
+
+        {/* Price */}
+        <div className="w-28 shrink-0 text-right">
+          <p className="text-base font-black text-slate-800 tabular-nums leading-none">₹{fmt(plan.price)}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5">per year</p>
+        </div>
+
+        {/* Divider */}
+        <div className="w-px h-8 bg-slate-100 shrink-0" />
+
+        {/* Max props */}
+        <div className="w-20 shrink-0 text-center">
+          <p className="text-sm font-bold text-slate-700">{plan.maxProperties === -1 ? '∞' : plan.maxProperties}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5">Max props</p>
+        </div>
+
+        {/* Owners */}
+        <div className="w-16 shrink-0 text-center">
+          <p className="text-sm font-bold text-slate-700">{plan.ownerCount}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5">Owners</p>
+        </div>
+
+        {/* Revenue */}
+        <div className="w-24 shrink-0 text-right">
+          <p className="text-sm font-bold tabular-nums" style={{ color: plan.annualRevenue > 0 ? '#10b981' : '#94a3b8' }}>
+            {revenueStr}
+          </p>
+          <p className="text-[10px] text-slate-400 mt-0.5">Revenue / yr</p>
+        </div>
+
+        {/* Edit */}
+        <button
+          onClick={() => onEdit(plan)}
+          className="ml-1 flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500 hover:border-slate-300 hover:text-slate-700 hover:bg-slate-50 transition-all opacity-0 group-hover:opacity-100 shrink-0"
+        >
+          <Pencil size={11} /> Edit
+        </button>
       </div>
-
-      {/* Divider */}
-      <div className="w-px h-8 bg-slate-100 shrink-0" />
-
-      {/* Max props */}
-      <div className="w-20 shrink-0 text-center">
-        <p className="text-sm font-bold text-slate-700">
-          {plan.maxProperties === -1 ? '∞' : plan.maxProperties}
-        </p>
-        <p className="text-[10px] text-slate-400 mt-0.5">Max props</p>
-      </div>
-
-      {/* Owners */}
-      <div className="w-16 shrink-0 text-center">
-        <p className="text-sm font-bold text-slate-700">{plan.ownerCount}</p>
-        <p className="text-[10px] text-slate-400 mt-0.5">Owners</p>
-      </div>
-
-      {/* Revenue */}
-      <div className="w-24 shrink-0 text-right">
-        <p className="text-sm font-bold tabular-nums" style={{ color: plan.annualRevenue > 0 ? '#10b981' : '#94a3b8' }}>
-          {plan.annualRevenue > 0
-            ? `₹${plan.annualRevenue >= 100000 ? (plan.annualRevenue / 100000).toFixed(1) + 'L' : fmt(plan.annualRevenue)}`
-            : '—'}
-        </p>
-        <p className="text-[10px] text-slate-400 mt-0.5">Revenue / yr</p>
-      </div>
-
-      {/* Edit */}
-      <button
-        onClick={() => onEdit(plan)}
-        className="ml-1 flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500 hover:border-slate-300 hover:text-slate-700 hover:bg-slate-50 transition-all opacity-0 group-hover:opacity-100 shrink-0"
-      >
-        <Pencil size={11} /> Edit
-      </button>
-    </div>
+    </>
   )
 }
 
@@ -266,8 +323,8 @@ export default function Subscriptions() {
       {/* ── Plan list ── */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
 
-        {/* Table header */}
-        <div className="flex items-center gap-4 px-5 py-3 border-b border-slate-100 bg-slate-50/60">
+        {/* Table header — desktop only */}
+        <div className="hidden sm:flex items-center gap-4 px-5 py-3 border-b border-slate-100 bg-slate-50/60">
           <div className="w-1 shrink-0" />
           <p className="w-40 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Plan</p>
           <p className="flex-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 hidden md:block">Description</p>

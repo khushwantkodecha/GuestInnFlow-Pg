@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   Plus, BedDouble, Home, Users, Search, X,
-  MoreVertical, Pencil, Trash2, Power, RotateCcw,
+  MoreVertical, Pencil, Trash2, Power, RotateCcw, Copy,
   Snowflake, Bath, StickyNote, Crown, FileText, SlidersHorizontal, Sparkles,
   UserPlus, CalendarClock, LogOut, Phone,
   IndianRupee, Calendar, AlertTriangle, Ban, Unlock,
@@ -25,6 +25,7 @@ import useApi from '../hooks/useApi'
 import { useProperty } from '../context/PropertyContext'
 import { useToast } from '../context/ToastContext'
 import Spinner from '../components/ui/Spinner'
+import { RoomsBedsSkeleton } from '../components/ui/Skeleton'
 import EmptyState from '../components/ui/EmptyState'
 import Modal from '../components/ui/Modal'
 import Drawer from '../components/ui/Drawer'
@@ -483,7 +484,7 @@ const BED_GRID_STYLES = `
 // ══════════════════════════════════════════════════════════════════════════════
 //  RoomCard
 // ══════════════════════════════════════════════════════════════════════════════
-const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDeleteRoom, onToggleActive, onReactivate, onAddExtraBed, onRoomClick, loadingBedId = null, refreshKey = 0, bedFilter = null, roomMatches = true }) => {
+const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDeleteRoom, onToggleActive, onReactivate, onAddExtraBed, onRoomClick, onDuplicateRoom, loadingBedId = null, refreshKey = 0, bedFilter = null, roomMatches = true }) => {
   const { data, loading, refetch } = useApi(
     () => getBeds(propertyId, room._id),
     [propertyId, room._id, refreshKey]
@@ -527,6 +528,7 @@ const RoomCard = ({ room, propertyId, onBedClick, onStatsReady, onEditRoom, onDe
   const menuItems = isInactive ? [] : [
     { label: 'View Room',       icon: Eye,    onClick: () => onRoomClick?.(room) },
     { label: 'Edit Room',       icon: Pencil, onClick: () => onEditRoom?.(room) },
+    { label: 'Duplicate Room',  icon: Copy,   onClick: () => onDuplicateRoom?.(room) },
     ...((occupied > 0 || reserved > 0 || blocked > 0 || extraBeds.length > 0)
       ? [{ label: 'Deactivate Room', icon: Power, disabled: true,
            tooltip: occupied > 0        ? `${occupied} bed${occupied > 1 ? 's' : ''} occupied`
@@ -5756,15 +5758,34 @@ const previewBedLabels = (bnType, count = 4) =>
 // ══════════════════════════════════════════════════════════════════════════════
 //  AddRoomModal — Smart room creation wizard
 // ══════════════════════════════════════════════════════════════════════════════
-const AddRoomModal = ({ onSubmit, onClose, saving }) => {
-  const [capChoice, setCapChoice] = useState('1')
-  const [customCap, setCustomCap] = useState('4')
-  const [bnType,    setBnType]    = useState('alphabet')
+const incrementRoomNumber = (n) => {
+  const s = String(n)
+  const numMatch = s.match(/^(.*?)(\d+)$/)
+  if (numMatch) return numMatch[1] + (Number(numMatch[2]) + 1)
+  const alphaMatch = s.match(/^(.*?)([A-Za-z])$/)
+  if (alphaMatch) return alphaMatch[1] + String.fromCharCode(alphaMatch[2].charCodeAt(0) + 1)
+  return s + '-copy'
+}
+
+const AddRoomModal = ({ onSubmit, onClose, saving, prefill = null }) => {
+  const isDupe = !!prefill
+  const initCap = prefill?.capacity
+  const initCapChoice = !initCap ? '1' : [1,2,3].includes(initCap) ? String(initCap) : 'custom'
+
+  const [capChoice, setCapChoice] = useState(initCapChoice)
+  const [customCap, setCustomCap] = useState(initCap && initCap > 3 ? String(initCap) : '4')
+  const [bnType,    setBnType]    = useState(prefill?.bedNumberingType ?? 'numeric')
   const [notesOpen, setNotesOpen] = useState(false)
   const [form, setForm] = useState({
-    roomNumber: '', floor: '0', baseRent: '',
-    hasAC: false, hasAttachedBathroom: false,
-    category: 'standard', gender: 'male', notes: '',
+    roomNumber:          prefill ? incrementRoomNumber(prefill.roomNumber) : '',
+    floor:               prefill?.floor != null ? String(prefill.floor) : '0',
+    baseRent:            prefill?.baseRent != null ? String(prefill.baseRent) : '',
+    rentType:            prefill?.rentType ?? undefined,
+    hasAC:               prefill?.hasAC ?? false,
+    hasAttachedBathroom: prefill?.hasAttachedBathroom ?? false,
+    category:            prefill?.category ?? 'standard',
+    gender:              prefill?.gender ?? 'male',
+    notes:               prefill?.notes ?? '',
   })
   const [errors, setErrors] = useState({})
 
@@ -5843,9 +5864,13 @@ const AddRoomModal = ({ onSubmit, onClose, saving }) => {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full bg-emerald-400 ring-[3px] ring-emerald-100 shrink-0" />
-                  <h2 className="text-[16px] font-bold text-slate-800 leading-tight">Add New Room</h2>
+                  <h2 className="text-[16px] font-bold text-slate-800 leading-tight">
+                    {isDupe ? `Duplicate Room ${prefill.roomNumber}` : 'Add New Room'}
+                  </h2>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-0.5 ml-4">Configure capacity, pricing and setup</p>
+                <p className="text-[11px] text-slate-400 mt-0.5 ml-4">
+                  {isDupe ? 'All settings copied — update room number to confirm' : 'Configure capacity, pricing and setup'}
+                </p>
               </div>
             </div>
             <button type="button" onClick={onClose}
@@ -7935,6 +7960,7 @@ const RoomsBeds = () => {
   const toast = useToast()
 
   const [showAddRoom,    setShowAddRoom]    = useState(false)
+  const [duplicateRoom,  setDuplicateRoom]  = useState(null) // room object to duplicate
   const [editRoom,       setEditRoom]       = useState(null)
   const [confirmDelete,     setConfirmDelete]     = useState(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
@@ -8207,6 +8233,21 @@ const RoomsBeds = () => {
     }
   }
 
+  const handleDuplicateRoom = async (form) => {
+    setSaving(true)
+    try {
+      await createRoom(propertyId, form)
+      setDuplicateRoom(null)
+      refetchRooms()
+      refreshProperties()
+      toast(`Room ${form.roomNumber} created`, 'success')
+    } catch (err) {
+      toast(err.response?.data?.message || 'Error creating room', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // ── 3-dot menu handlers ─────────────────────────────────────────────────
   const handleEditRoom = (room) => {
     setEditRoom(room)
@@ -8304,12 +8345,14 @@ const RoomsBeds = () => {
     }
   }
 
+  if (propertyId && roomLoading) return <RoomsBedsSkeleton />
+
   return (
-    <div className="space-y-5 max-w-7xl animate-pageIn">
+    <div className="space-y-3 sm:space-y-5 max-w-7xl animate-pageIn">
 
       {/* Toolbar */}
       {propertyId && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
               <h2 className="font-semibold text-slate-800">{selectedProperty.name}</h2>
@@ -8362,8 +8405,6 @@ const RoomsBeds = () => {
       {/* Content */}
       {!propertyId ? (
         <NoPropertyState />
-      ) : roomLoading ? (
-        <Spinner />
       ) : rooms.length === 0 ? (
         <div className="card py-16">
           <div className="flex flex-col items-center text-center gap-4 max-w-sm mx-auto">
@@ -8401,6 +8442,7 @@ const RoomsBeds = () => {
               onReactivate={handleReactivateRoom}
               onAddExtraBed={(room, existingExtraCount, vacantNormalCount) => setExtraBedRoom({ room, existingExtraCount, vacantNormalCount })}
               onRoomClick={room => setSelectedRoom(room)}
+              onDuplicateRoom={room => setDuplicateRoom(room)}
               loadingBedId={loadingBedId}
               refreshKey={bedRefreshKeys[r._id] ?? 0}
               bedFilter={activeBedFilter}
@@ -8408,6 +8450,16 @@ const RoomsBeds = () => {
             />
           ))}
         </div>
+      )}
+
+      {/* Duplicate Room Modal */}
+      {duplicateRoom && (
+        <AddRoomModal
+          prefill={duplicateRoom}
+          onSubmit={handleDuplicateRoom}
+          onClose={() => setDuplicateRoom(null)}
+          saving={saving}
+        />
       )}
 
       {/* Add Room Modal */}

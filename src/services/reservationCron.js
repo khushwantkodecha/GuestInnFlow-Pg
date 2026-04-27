@@ -18,7 +18,9 @@ const cron           = require('node-cron');
 const Bed            = require('../models/Bed');
 const Tenant         = require('../models/Tenant');
 const Reservation    = require('../models/Reservation');
+const Room           = require('../models/Room');
 const { runWithRetry } = require('../utils/runWithRetry');
+const { sendReservationExpiredEmail } = require('./emailService');
 
 const logger = {
   info:  (event, meta = {}) => console.log(JSON.stringify({ level: 'info',  ts: new Date().toISOString(), event, ...meta })),
@@ -88,6 +90,24 @@ const expireStaleReservations = async () => {
         logger.info('cron.reservation_expiry.bed_freed', {
           bedId: expiredBed._id, linkedTenantId, hadAdvance: advAmt > 0,
         });
+
+        // Notify tenant by email (non-blocking)
+        if (linkedTenantId) {
+          try {
+            const expiredTenant = await Tenant.findById(linkedTenantId).select('name email').lean();
+            const expiredRoom   = await Room.findById(expiredBed.room).select('roomNumber').lean();
+            if (expiredTenant?.email && expiredRoom) {
+              sendReservationExpiredEmail({
+                name:         expiredTenant.name,
+                email:        expiredTenant.email,
+                roomNumber:   expiredRoom.roomNumber,
+                bedNumber:    expiredBed.bedNumber,
+                reservedTill: expiredBed.reservedTill,
+                advanceAmount: advAmt,
+              }).catch(() => {});
+            }
+          } catch (_) {}
+        }
 
       } catch (bedErr) {
         errCount++;

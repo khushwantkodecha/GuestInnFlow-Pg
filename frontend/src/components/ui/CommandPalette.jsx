@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Search, LayoutDashboard, Building2, BedDouble, Users,
-  CreditCard, Receipt, BarChart3, MapPin, Phone, Hash,
+  CreditCard, BarChart3, MapPin, Phone, Hash,
   ArrowRight, Loader2, SlidersHorizontal,
 } from 'lucide-react'
 import { globalSearch } from '../../api/search'
@@ -15,7 +15,6 @@ const QUICK_ACTIONS = [
   { id: 'nav-rooms',      label: 'Go to Rooms & Beds', icon: BedDouble,      path: '/rooms',      section: 'Navigate' },
   { id: 'nav-tenants',    label: 'Go to Tenants',     icon: Users,           path: '/tenants',    section: 'Navigate' },
   { id: 'nav-rent',       label: 'Go to Rent',        icon: CreditCard,      path: '/rent',       section: 'Navigate' },
-  { id: 'nav-expenses',   label: 'Go to Expenses',    icon: Receipt,         path: '/expenses',   section: 'Navigate' },
   { id: 'nav-reports',    label: 'Go to Reports',     icon: BarChart3,       path: '/reports',    section: 'Navigate' },
 ]
 

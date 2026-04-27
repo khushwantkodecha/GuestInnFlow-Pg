@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo, memo } from 'react'
 import { Menu, Settings, ChevronRight } from 'lucide-react'
 import { useAuth }     from '../../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
 
-const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
+const Navbar = memo(({ title, onOpenSidebar, sidebarCollapsed }) => {
   const { user }   = useAuth()
   const navigate   = useNavigate()
 
@@ -20,12 +20,10 @@ const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const initials = user?.name
-    ?.split(' ')
-    .map((n) => n[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2)
+  const initials = useMemo(() =>
+    user?.name?.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2),
+    [user?.name]
+  )
 
   return (
     <header
@@ -86,6 +84,6 @@ const Navbar = ({ title, onOpenSidebar, sidebarCollapsed }) => {
       </div>
     </header>
   )
-}
+})
 
 export default Navbar

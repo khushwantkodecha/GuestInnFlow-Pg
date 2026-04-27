@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react'
 import { getMe, updateMe } from '../api/auth'
 
 const AuthContext = createContext(null)
@@ -19,25 +19,30 @@ export const AuthProvider = ({ children }) => {
       .finally(() => setLoading(false))
   }, [])
 
-  const loginUser = (token, userData) => {
+  const loginUser = useCallback((token, userData) => {
     localStorage.setItem('token', token)
     localStorage.setItem('gif_login_ts', new Date().toISOString())
     setUser(userData)
-  }
+  }, [])
 
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem('token')
     setUser(null)
-  }
+  }, [])
 
-  const updateUser = async (data) => {
+  const updateUser = useCallback(async (data) => {
     const res = await updateMe(data)
     setUser(res.data.data)
     return res
-  }
+  }, [])
+
+  const value = useMemo(
+    () => ({ user, loading, loginUser, logout, updateUser }),
+    [user, loading, loginUser, logout, updateUser]
+  )
 
   return (
-    <AuthContext.Provider value={{ user, loading, loginUser, logout, updateUser }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   )

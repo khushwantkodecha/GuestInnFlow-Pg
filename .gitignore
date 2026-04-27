@@ -1,3 +1,16 @@
 node_modules/
 .env
+.env.*
+!.env.example
 *.log
+frontend/dist/
+superadmin/frontend/dist/
+
+# Test artifacts
+test-results/
+test-screenshots/
+playwright-report/
+screenshots/
+__snapshots__/
+*.png.snap
+*.jpg.snap

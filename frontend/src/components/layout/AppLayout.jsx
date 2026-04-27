@@ -11,7 +11,6 @@ const TITLES = {
   '/rooms':      'Rooms & Beds',
   '/tenants':    'Tenants',
   '/rent':       'Rent',
-  '/expenses':   'Expenses',
   '/accounting': 'Accounting',
   '/reports':    'Reports',
   '/settings':   'Settings',
